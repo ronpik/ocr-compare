@@ -1,0 +1,6 @@
+{
+  "processor_name": "projects/your-project-id/locations/us/processors/your-processor-id",
+  "location": "us",
+  "timeout": 300,
+  "service_account_file": "/path/to/your/service-account.json"
+}
