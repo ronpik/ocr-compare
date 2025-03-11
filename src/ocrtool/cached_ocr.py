@@ -6,11 +6,11 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 
+from dstools.storage.handlers import StorageHandlerConfig
+
 from ocrtool.ocr_impls.cached_ocr_executor import CachedOcrExecutor
 from ocrtool.ocr_impls.ocr_executor import OcrExecutor
 from ocrtool.ocr_impls.ocr_factory import OcrExecutorFactory
-from ocrtool.storage.config import StorageConfig
-from ocrtool.storage.handlers.storage_handler import StorageHandler
 
 
 def get_cached_executor(
@@ -43,19 +43,19 @@ def get_cached_executor(
     
     # Try to get storage handler from environment if not specified
     if not storage_config_path and not storage_type:
-        storage_handler = StorageConfig.from_env()
+        storage_handler = StorageHandlerConfig.from_env()
     
     # Get storage handler from config file if provided
     if storage_config_path:
-        storage_handler = StorageConfig.create_handler_from_file(storage_config_path)
+        storage_handler = StorageHandlerConfig.create_handler_from_file(storage_config_path)
     
     # Get storage handler from arguments if provided
     elif storage_type and storage_config:
-        storage_handler = StorageConfig.create_handler_from_args(storage_type, storage_config)
+        storage_handler = StorageHandlerConfig.create_handler_from_args(storage_type, storage_config)
         
     # Default to local storage if no other option specified
     if not storage_handler:
-        from ocrtool.storage.handlers.local_handler import LocalStorageHandler
+        from dstools.storage.handlers.local_handler import LocalStorageHandler
         # Use home directory for cache
         cache_dir = Path.home() / '.ocr_cache'
         os.makedirs(cache_dir, exist_ok=True)
@@ -94,13 +94,13 @@ def get_cached_ocr_engine(
     # Initialize storage
     storage_handler = None
     if storage_path:
-        storage_handler = StorageConfig.create_handler_from_file(storage_path)
+        storage_handler = StorageHandlerConfig.create_handler_from_file(storage_path)
     else:
-        storage_handler = StorageConfig.from_env()
+        storage_handler = StorageHandlerConfig.from_env()
         
     # Default to local storage if no other option specified
     if not storage_handler:
-        from ocrtool.storage.handlers.local_handler import LocalStorageHandler
+        from dstools.storage.handlers.local_handler import LocalStorageHandler
         # Use home directory for cache
         cache_dir = Path.home() / '.ocr_cache'
         os.makedirs(cache_dir, exist_ok=True)
