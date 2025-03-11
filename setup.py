@@ -60,7 +60,8 @@ setup(
     packages=find_packages(where="src"),
     python_requires=">=3.8",
     install_requires=[
-        "pillow",  # Required for image processing
+        "pillow",  # Required for image processing,
+        "python-dstools"
     ],
     extras_require={
         "tesseract": ["pytesseract"],
