@@ -7,6 +7,7 @@ from google.oauth2 import service_account
 from google.protobuf.json_format import MessageToDict
 
 from ocrtool.canonical_ocr.ocr_schema import OcrResult
+from ocrtool.ocr_impls.gdai import GdaiConfig
 from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_convert import process_documentai_result
 
@@ -16,7 +17,7 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
     OCR executor implementation using Google Document AI.
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None):
         """
         Initialize the Google Document AI OCR executor.
         
@@ -30,15 +31,14 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
                 - location: API endpoint location (default: "us")
                 - timeout: Timeout in seconds for API calls (default: 300)
         """
-        self.config = config or {}
-        
-        # Validate required configuration
-        if 'processor_name' not in self.config:
-            raise ValueError("'processor_name' is required in the configuration")
-        
-        self.processor_name = self.config['processor_name']
-        self.location = self.config.get('location', 'us')
-        self.timeout = self.config.get('timeout', 300)
+        if isinstance(config, dict):
+            self.config = GdaiConfig(**config)
+        else:
+            self.config = config or GdaiConfig()
+
+        self.processor_name = self.config.processor_name
+        self.location = self.config.location
+        self.timeout = self.config.timeout
         
         # Set up credentials
         self.credentials = self._setup_credentials()
@@ -60,20 +60,16 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
         Returns:
             google.auth.credentials.Credentials: The credentials to use for API calls
         """
-        # Check if credentials object is directly provided
-        if 'credentials' in self.config:
-            return self.config['credentials']
-        
-        # Check for service account file path
-        if 'service_account_file' in self.config:
+
+        if self.config.service_account_file:
             return service_account.Credentials.from_service_account_file(
-                self.config['service_account_file']
+                self.config.service_account_file
             )
         
         # Check for service account info as dictionary
-        if 'service_account_info' in self.config:
+        if self.config.service_account_info:
             return service_account.Credentials.from_service_account_info(
-                self.config['service_account_info']
+                self.config.service_account_info
             )
         
         # Use default credentials if no specific credentials provided
@@ -109,12 +105,26 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
             content=image_data,
             mime_type=mime_type
         )
+        selected_pages = kwargs.get('selected_pages')
+
+        process_options = documentai.ProcessOptions(
+            # individual_page_selector=documentai.ProcessOptions.IndividualPageSelector(
+            #     pages=[1, 2, 3]  # Optional: specify pages if needed
+            # ),
+            # This enables imageless mode
+            ocr_config=documentai.OcrConfig(
+                enable_image_quality_scores=False,  # This is the key change
+
+            )
+        )
+
         
         # Create process request
         request = documentai.ProcessRequest(
             name=self.processor_name,
             raw_document=raw_document,
-            skip_human_review=True
+            skip_human_review=True,
+            process_options=process_options,
         )
         
         # Process the document

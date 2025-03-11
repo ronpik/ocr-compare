@@ -74,24 +74,6 @@ class GoogleCloudDocumentOCR:
         return ocr_result
 
 
-def default_document_ocr(firebase_env: FirebaseEnv) -> GoogleCloudDocumentOCR:
-    """
-    Instantiate GoogleCloudDocumentOCR using the prediction endpoint from an environment variable
-    and credentials based on the given FirebaseEnv.
-
-    Args:
-        firebase_env: An instance of FirebaseEnv to use for loading credentials.
-
-    Returns:
-        An instance of GoogleCloudDocumentOCR.
-    """
-    prediction_endpoint = os.getenv("DOCUMENT_AI_PRED_ENDPOINT")
-    if not prediction_endpoint:
-        raise EnvironmentError("PREDICTION_ENDPOINT environment variable is not set")
-    credentials = get_document_ai_credentials()
-    return GoogleCloudDocumentOCR(prediction_endpoint=prediction_endpoint, credentials=credentials)
-
-
 if __name__ == '__main__':
     async def main():
         # Load your PDF bytes from file (or any other source).

@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 
-from ocrtool import execute_ocr, create_ocr_engine
+from ocrtool import execute_ocr
 from ocrtool.ocr_impls.gdai import GoogleDocumentAIOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_config import GdaiConfig
 
@@ -86,7 +86,7 @@ def main():
     try:
         # Load the GDAI configuration
         gdai_config = GdaiConfig.from_file(str(config_path))
-        config_dict = gdai_config.to_dict()
+        config_dict = gdai_config
         
         # Verify processor name
         processor_name = gdai_config.processor_name
@@ -108,7 +108,7 @@ def main():
         
         # Method 1: Using the factory pattern
         print("\nMethod 1: Using factory pattern")
-        result1 = execute_ocr(document_data, engine="gdai", engine_config=config_dict)
+        result1 = execute_ocr(document_data, engine="gdai", engine_config=config_dict.to_dict())
         
         # Method 2: Creating executor instance directly
         print("\nMethod 2: Creating executor instance directly")
@@ -159,9 +159,8 @@ def main():
             print(f"\nResults saved to {output_path}")
         
     except Exception as e:
-        print(f"Error processing document: {e}")
-        return 1
-    
+        raise
+
     return 0
 
 

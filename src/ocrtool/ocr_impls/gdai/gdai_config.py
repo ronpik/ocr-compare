@@ -13,7 +13,7 @@ class GdaiConfig:
     """
     Configuration dataclass for Google Document AI OCR.
     """
-    processor_name: str
+    processor_name: str = ''
     location: str = "us"
     timeout: int = 300
     service_account_file: Optional[str] = None

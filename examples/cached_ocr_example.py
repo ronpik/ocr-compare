@@ -7,15 +7,14 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
+
+from dstools.storage.handlers import LocalStorageHandler, StorageHandlerConfig
 
 from ocrtool.ocr_impls.tesseract.tesseract_executor import TesseractOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_executor import GoogleDocumentAIOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_config import GdaiConfig
 from ocrtool.ocr_impls.cached_ocr_executor import CachedOcrExecutor
-from ocrtool.storage.config import StorageConfig
-from ocrtool.storage.handlers.local_handler import LocalStorageHandler
-from ocrtool.storage.handlers.gcs_handler import GCSHandler
 
 
 def read_image(image_path: str) -> bytes:
@@ -61,11 +60,11 @@ def create_example_config(output_path: str, config_type: str):
     print("Please edit this file with your actual settings.")
 
 
-def main():
+def parse_arge() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='OCR with caching example')
     parser.add_argument('image_path', help='Path to the image file to process', nargs='?')
     parser.add_argument(
-        '--storage-config', 
+        '--storage-config',
         help='Path to the storage configuration file'
     )
     parser.add_argument(
@@ -83,13 +82,13 @@ def main():
         help='Type of configuration to create with --create-config'
     )
     parser.add_argument(
-        '--cache-prefix', 
+        '--cache-prefix',
         default='ocr_cache',
         help='Prefix for cache storage (default: ocr_cache)'
     )
     parser.add_argument(
-        '--method', 
-        choices=['tesseract', 'gdai'], 
+        '--method',
+        choices=['tesseract', 'gdai'],
         default='tesseract',
         help='OCR method to use (default: tesseract)'
     )
@@ -100,6 +99,11 @@ def main():
         help='Storage type to use when not using config file (default: local)'
     )
     args = parser.parse_args()
+    return args
+
+
+def main():
+    args = parse_arge()
     
     # If create-config option was used, create the example config and exit
     if args.create_config:
@@ -118,7 +122,7 @@ def main():
     storage_handler = None
     if args.storage_config:
         # Use config file
-        storage_handler = StorageConfig.create_handler_from_file(args.storage_config)
+        storage_handler = StorageHandlerConfig.create_handler_from_file(args.storage_config)
     else:
         # Use command line parameters
         if args.storage_type == 'local':
@@ -159,13 +163,15 @@ def main():
         if args.ocr_config:
             # Use the ocr_config loaded from file
             gdai_config = GdaiConfig.from_file(args.ocr_config)
-            base_executor = GoogleDocumentAIOcrExecutor(config=gdai_config.to_dict())
+            base_executor = GoogleDocumentAIOcrExecutor(config=gdai_config)
         else:
             # This is a mock example - in real usage, you'd need to provide actual processor details
             print("GDAI selected, but no configuration file provided.")
             print("This is a mock example. Using Tesseract instead.")
             # Fallback to Tesseract for the example
             base_executor = TesseractOcrExecutor()
+    else:
+        raise ValueError(f"Invalid OCR method: {args.method}")
     
     # Create the cached executor
     cached_executor = CachedOcrExecutor(

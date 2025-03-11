@@ -43,8 +43,8 @@ class OcrExecutorFactory:
             raise ValueError(
                 f"OCR implementation '{name}' not found. Available implementations: {registered}"
             )
-        
-        return executor_class(**kwargs)
+
+        return executor_class(kwargs)
     
     @classmethod
     def list_available(cls) -> Dict[str, Dict[str, str]]:

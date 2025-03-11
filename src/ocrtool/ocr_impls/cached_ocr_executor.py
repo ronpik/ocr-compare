@@ -1,12 +1,12 @@
 import hashlib
 import json
-import pickle
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+from dstools.storage.handlers.storage_handler import StorageHandler
 
 from ocrtool.canonical_ocr.ocr_schema import OcrResult
-from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor, OcrExecutor
-from ocrtool.storage.handlers.storage_handler import StorageHandler
+from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
+
 
 
 class CachedOcrExecutor(ExternalOcrExecutor):
@@ -17,7 +17,7 @@ class CachedOcrExecutor(ExternalOcrExecutor):
     
     def __init__(
         self,
-        decorated_executor: OcrExecutor,
+        decorated_executor: ExternalOcrExecutor,
         storage_handler: StorageHandler,
         cache_prefix: str
     ):
@@ -97,27 +97,8 @@ class CachedOcrExecutor(ExternalOcrExecutor):
         Returns:
             OcrResult: Results in canonical schema format
         """
-        if isinstance(self._executor, ExternalOcrExecutor):
-            # If the decorated executor is an ExternalOcrExecutor, call its convert_to_canonical method
-            return self._executor.convert_to_canonical(native_result)
-        else:
-            # If it's a regular OcrExecutor, we can't use its conversion directly
-            # This is a fallback, but may not work with all implementations
-            self._executor.execute_ocr(b'')  # Dummy call to avoid implementation errors
-            original_result = self._executor.get_native_result()
-            
-            # Check if the result has a raw_result field (fallback for non-dict native results)
-            if 'raw_result' in native_result and len(native_result) == 1:
-                print("Warning: Using string representation of non-dictionary result. Conversion may be incomplete.")
-            
-            # Temporarily replace the native result with our cached result
-            self._executor._last_result = native_result  
-            result = self._executor._convert_to_canonical()
-            
-            # Restore the original result
-            self._executor._last_result = original_result
-            
-            return result
+        return self._executor.convert_to_canonical(native_result)
+
     
     def get_native_result(self) -> Any:
         """
