@@ -52,8 +52,8 @@ if any('magic' in arg or 'all' in arg for arg in sys.argv):
     install_libmagic()
 
 setup(
-    name="ocrtool",
-    version="0.1.0",
+    name="ocr-compare",
+    version="0.1.2",
     description="A tool for comparing OCR results from different OCR engines",
     author="OCR Compare Team",
     package_dir={"": "src"},
