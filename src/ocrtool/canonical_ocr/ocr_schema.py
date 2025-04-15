@@ -160,4 +160,4 @@ class OcrResult:
 
     def blocks(self) -> Iterable[Block]:
         for page in self.document.children():
-            yield from page.blocks
+            yield from page.blocks;
