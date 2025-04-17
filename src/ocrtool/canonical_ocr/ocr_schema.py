@@ -161,3 +161,91 @@ class OcrResult:
     def blocks(self) -> Iterable[Block]:
         for page in self.document.children():
             yield from page.blocks;
+
+
+@dataclass
+class Cell(LayoutElement[None]):
+    """Represents a single cell in a table row."""
+    text_value: str
+    confidence: Optional[float]
+    column_no: Optional[int] = None
+
+    def children(self) -> Iterable[None]:
+        """Cells have no children."""
+        return []
+
+    def text(self) -> str:
+        """Return the text value of the cell."""
+        return self.text_value
+
+    @classmethod
+    def type(cls) -> str:
+        """Return the type name for this element."""
+        return "cell"
+
+
+@dataclass
+class Row(LayoutElement[Cell]):
+    """Represents a row in a table, consisting of cells."""
+    cells: List[Cell]
+    confidence: Optional[float] = None
+    row_no: Optional[int] = None
+
+    def children(self) -> Iterable[Cell]:
+        """Return the cells in this row."""
+        return self.cells
+
+    def text(self) -> str:
+        """Return the concatenated text of all cells in the row, separated by tabs."""
+        return '\t'.join(cell.text() for cell in self.cells)
+
+    @classmethod
+    def type(cls) -> str:
+        """Return the type name for this element."""
+        return "row"
+
+
+@dataclass
+class HeaderRow(Row):
+    """Represents the header row of a table."""
+    def type(cls) -> str:
+        """Return the type name for this element."""
+        return "header_row"
+
+
+@dataclass
+class BodyRow(Row):
+    """Represents a body row of a table."""
+    def type(cls) -> str:
+        """Return the type name for this element."""
+        return "body_row"
+
+
+@dataclass
+class Table(LayoutElement[Row]):
+    """Represents a table layout element, with header and body rows."""
+    header: Optional[HeaderRow] = None
+    body: List[BodyRow] = field(default_factory=list)
+    confidence: Optional[float] = None
+    table_no: Optional[int] = None
+
+    def children(self) -> Iterable[Row]:
+        """Return the header and body rows as children."""
+        children: List[Row] = []
+        if self.header:
+            children.append(self.header)
+        children.extend(self.body)
+        return children
+
+    def text(self) -> str:
+        """Return the text of the table as TSV (header + body)."""
+        rows = []
+        if self.header:
+            rows.append(self.header.text())
+        rows.extend(row.text() for row in self.body)
+        return '\n'.join(rows)
+
+    @classmethod
+    def type(cls) -> str:
+        """Return the type name for this element."""
+        return "table"

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Example script demonstrating how to use Google Document AI for OCR with ocrtool.
+Example script demonstrating how to use Google Document AI for OCR or Layout with ocrtool.
 
 This script shows how to properly set up authentication and use Google Document AI
-as an OCR engine within the ocrtool framework.
+as an OCR or Layout engine within the ocrtool framework.
 
 Prerequisites:
 1. Set up a Document AI processor in Google Cloud Console
@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 from ocrtool import execute_ocr
-from ocrtool.ocr_impls.gdai import GoogleDocumentAIOcrExecutor
+from ocrtool.ocr_impls.gdai import GoogleDocumentAIOcrExecutor, GoogleDocumentAILayoutExecutor
 from ocrtool.ocr_impls.gdai.gdai_config import GdaiConfig
 
 
@@ -46,11 +46,12 @@ def create_example_config(output_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Process a document with Google Document AI OCR")
+    parser = argparse.ArgumentParser(description="Process a document with Google Document AI OCR or Layout")
     parser.add_argument("document_path", help="Path to the document file to process", nargs="?")
     parser.add_argument("--config", help="Path to Google Document AI configuration file")
     parser.add_argument("--create-config", help="Create an example configuration file at the specified path and exit")
     parser.add_argument("--output", help="Output file path for OCR results (JSON)", default=None)
+    parser.add_argument("--layout", action="store_true", help="Use the layout processor instead of OCR processor")
     
     args = parser.parse_args()
     
@@ -105,14 +106,26 @@ def main():
         
         print(f"Processing document: {document_path}")
         print(f"Using processor: {processor_name}")
+        if args.layout:
+            print("Processor type: LAYOUT")
+        else:
+            print("Processor type: OCR")
+        
+        # Choose executor class based on --layout flag
+        if args.layout:
+            ExecutorClass = GoogleDocumentAILayoutExecutor
+            engine_name = "gdai-layout"
+        else:
+            ExecutorClass = GoogleDocumentAIOcrExecutor
+            engine_name = "gdai"
         
         # Method 1: Using the factory pattern
         print("\nMethod 1: Using factory pattern")
-        result1 = execute_ocr(document_data, engine="gdai", engine_config=config_dict.to_dict())
+        result1 = execute_ocr(document_data, engine=engine_name, engine_config=config_dict.to_dict())
         
         # Method 2: Creating executor instance directly
         print("\nMethod 2: Creating executor instance directly")
-        gdai_executor = GoogleDocumentAIOcrExecutor(config=config_dict)
+        gdai_executor = ExecutorClass(config=config_dict)
         result2 = gdai_executor.execute_ocr(document_data)
         
         # Display results
