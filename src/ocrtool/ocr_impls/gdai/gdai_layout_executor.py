@@ -1,9 +1,9 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ocrtool.canonical_ocr.ocr_schema import (
     BoundingBox, Symbol, Word, Line, Paragraph, Block, Page, Document, OcrResult,
-    Table, HeaderRow, BodyRow, Cell, Properties
+    Table, HeaderRow, BodyRow, Cell, Properties, LayoutElement
 )
 
 def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
@@ -22,7 +22,7 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
     document_path = Path("document")
     page_no = 1  # Assume single page for now
     page_path = document_path / f"page_{page_no}"
-    page_blocks: List[Block] = []
+    page_elements: List[LayoutElement[Any]] = []
     table_count = 0
 
     def make_symbol(text: str, idx: int, word_path: Path) -> Symbol:
@@ -56,20 +56,22 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
             confidence=1.0
         )
 
-    for block_idx, block in enumerate(blocks):
-        block_path = page_path / f"block_{block_idx}"
+    def parse_block(block: Dict[str, Any], block_path: Path, block_idx: int) -> Block:
+        """
+        Recursively parse a block dict into a Block object, supporting paragraphs, tables, and nested blocks.
+        """
+        elements: List[LayoutElement[Any]] = []
+        block_type = block.get("textBlock", {}).get("type", "TEXT") if "textBlock" in block else (
+            "TABLE" if "tableBlock" in block else "BLOCK"
+        )
+        # Paragraph
         if "textBlock" in block:
             text = block["textBlock"].get("text", "")
             para = make_paragraph(text, block_path / "paragraph_0")
-            blk = Block(
-                element_path=block_path,
-                paragraphs=[para],
-                blockType=block["textBlock"].get("type", "TEXT"),
-                confidence=1.0,
-                block_no=block_idx
-            )
-            page_blocks.append(blk)
-        elif "tableBlock" in block:
+            elements.append(para)
+        # Table
+        if "tableBlock" in block:
+            nonlocal table_count
             table_count += 1
             table_path = block_path / f"table_{table_count}"
             table_block = block["tableBlock"]
@@ -80,7 +82,11 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
                 cells = row.get("cells", [])
                 cell_objs = []
                 for col_idx, cell in enumerate(cells):
+                    # Each cell can have its own blocks (layout structure)
                     cell_blocks = cell.get("blocks", [])
+                    parsed_blocks = [parse_block(cb, table_path / f"row_{row_idx}" / f"cell_{col_idx}" / f"block_{i}", i)
+                                    for i, cb in enumerate(cell_blocks)]
+                    # text_value is the concatenation of all leaf text in the cell
                     cell_text = " ".join(
                         b.get("textBlock", {}).get("text", "") for b in cell_blocks if "textBlock" in b
                     )
@@ -88,7 +94,8 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
                         element_path=table_path / f"row_{row_idx}" / f"cell_{col_idx}",
                         text_value=cell_text,
                         confidence=1.0,
-                        column_no=col_idx
+                        column_no=col_idx,
+                        blocks=parsed_blocks
                     )
                     cell_objs.append(cell_obj)
                 if row_idx == 0:
@@ -112,32 +119,35 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
                 confidence=1.0,
                 table_no=table_count
             )
-            # Wrap table in a paragraph and block for schema compatibility
-            para = Paragraph(
-                element_path=table_path / "paragraph_0",
-                lines=[],
-                confidence=1.0
-            )
-            blk = Block(
-                element_path=block_path,
-                paragraphs=[para],
-                blockType="TABLE",
-                confidence=1.0,
-                block_no=block_idx,
-                extra={"table": table_obj}
-            )
-            page_blocks.append(blk)
+            elements.append(table_obj)
+        # Nested blocks (not defined in this schema, but if present, parse recursively)
+        if "blocks" in block and not ("textBlock" in block or "tableBlock" in block):
+            for i, subblock in enumerate(block["blocks"]):
+                subblock_obj = parse_block(subblock, block_path / f"block_{i}", i)
+                elements.append(subblock_obj)
+        return Block(
+            element_path=block_path,
+            elements=elements,
+            blockType=block_type,
+            confidence=1.0,
+            block_no=block_idx
+        )
+
+    for block_idx, block in enumerate(blocks):
+        block_path = page_path / f"block_{block_idx}"
+        block_obj = parse_block(block, block_path, block_idx)
+        page_elements.append(block_obj)
 
     page = Page(
         element_path=page_path,
         width=0,
         height=0,
-        blocks=page_blocks,
+        blocks=page_elements,  # blocks is now a list of Block, each with elements
         confidence=1.0,
         page_no=page_no
     )
-    document = Document(
+    document_obj = Document(
         element_path=document_path,
         pages=[page]
     )
-    return OcrResult(document=document)
+    return OcrResult(document=document_obj)

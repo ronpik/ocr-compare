@@ -117,22 +117,22 @@ def main():
             engine_name = "gdai-layout"
         else:
             ExecutorClass = GoogleDocumentAIOcrExecutor
-            engine_name = "gdai"
+            engine_name = "gdai-ocr"
         
         # Method 1: Using the factory pattern
         print("\nMethod 1: Using factory pattern")
         result1 = execute_ocr(document_data, engine=engine_name, engine_config=config_dict.to_dict())
         
-        # Method 2: Creating executor instance directly
-        print("\nMethod 2: Creating executor instance directly")
-        gdai_executor = ExecutorClass(config=config_dict)
-        result2 = gdai_executor.execute_ocr(document_data)
+        # # Method 2: Creating executor instance directly
+        # print("\nMethod 2: Creating executor instance directly")
+        # gdai_executor = ExecutorClass(config=config_dict)
+        # result2 = gdai_executor.execute_ocr(document_data)
         
         # Display results
         print("\nDocument Analysis Results:")
         print(f"  - Pages: {len(result1.document.pages)}")
         print(f"  - Blocks: {sum(len(page.blocks) for page in result1.document.pages)}")
-        
+
         # Print first few words of text
         text = result1.document.text()
         preview = text[:100] + "..." if len(text) > 100 else text

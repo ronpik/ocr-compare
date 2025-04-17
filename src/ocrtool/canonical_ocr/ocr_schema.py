@@ -2,7 +2,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Iterable, Dict, TypeVar, Generic, Any
+from typing import List, Optional, Iterable, Dict, TypeVar, Generic, Any, TYPE_CHECKING, Union
+from enum import Enum, auto
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,22 @@ class LayoutElement(Generic[E], ABC):
         raise NotImplementedError
 
 
+class LayoutElementType(str, Enum):
+    """Enumeration of all canonical OCR layout element types."""
+    SYMBOL = "SYMBOL"
+    WORD = "WORD" 
+    LINE = "LINE"
+    PARAGRAPH = "PARAGRAPH"
+    BLOCK = "BLOCK"
+    PAGE = "PAGE"
+    DOCUMENT = "DOCUMENT"
+    CELL = "CELL"
+    ROW = "ROW"
+    HEADER_ROW = "HEADER_ROW"
+    BODY_ROW = "BODY_ROW"
+    TABLE = "TABLE"
+
+
 @dataclass
 class Symbol(LayoutElement[None]):
     text_value: str
@@ -50,8 +67,9 @@ class Symbol(LayoutElement[None]):
         return self.text_value
 
     @classmethod
-    def type(cls) -> str:
-        return "symbol"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.SYMBOL
 
 
 @dataclass
@@ -66,8 +84,9 @@ class Word(LayoutElement[Symbol]):
         return ''.join(symbol.text() for symbol in self.symbols)
 
     @classmethod
-    def type(cls) -> str:
-        return "word"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.WORD
 
 
 @dataclass
@@ -82,8 +101,9 @@ class Line(LayoutElement[Word]):
         return ' '.join(word.text() for word in self.words)
 
     @classmethod
-    def type(cls) -> str:
-        return "line"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.LINE
 
 
 @dataclass
@@ -98,26 +118,36 @@ class Paragraph(LayoutElement[Line]):
         return ' '.join(line.text() for line in self.lines)
 
     @classmethod
-    def type(cls) -> str:
-        return "paragraph"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.PARAGRAPH
 
+
+if TYPE_CHECKING:
+    from ocrtool.canonical_ocr.ocr_schema import Table, Paragraph, Block
 
 @dataclass
-class Block(LayoutElement[Paragraph]):
-    paragraphs: List[Paragraph]
+class Block(LayoutElement[Union['Table', 'Paragraph', 'Block']]):
+    """
+    Represents a block element, which can contain paragraphs, tables, or other blocks as children.
+    """
+    elements: List[Union['Table', 'Paragraph', 'Block']]
     blockType: str
     confidence: float
     block_no: Optional[int] = None
 
-    def children(self) -> Iterable[Paragraph]:
-        return self.paragraphs
+    def children(self) -> Iterable[Union['Table', 'Paragraph', 'Block']]:
+        """Yield all child elements (Paragraph, Table, or Block)."""
+        return self.elements
 
     def text(self) -> str:
-        return '\n'.join(paragraph.text() for paragraph in self.paragraphs)
+        """Return the concatenated text of all child elements."""
+        return '\n'.join(element.text() for element in self.elements)
 
     @classmethod
-    def type(cls) -> str:
-        return "block"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.BLOCK
 
 
 @dataclass
@@ -135,8 +165,9 @@ class Page(LayoutElement[Block]):
         return '\n\n'.join(block.text() for block in self.blocks)
 
     @classmethod
-    def type(cls) -> str:
-        return "page"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.PAGE
 
 
 @dataclass
@@ -150,8 +181,9 @@ class Document(LayoutElement[Page]):
         return '\n=====\n'.join(page.text() for page in self.pages)
 
     @classmethod
-    def type(cls) -> str:
-        return 'document'
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.DOCUMENT
 
 
 @dataclass
@@ -160,28 +192,33 @@ class OcrResult:
 
     def blocks(self) -> Iterable[Block]:
         for page in self.document.children():
-            yield from page.blocks;
+            yield from page.blocks
 
 
 @dataclass
-class Cell(LayoutElement[None]):
-    """Represents a single cell in a table row."""
+class Cell(LayoutElement[Block]):
+    """
+    Represents a single cell in a table row, which can contain blocks as children.
+    """
     text_value: str
     confidence: Optional[float]
     column_no: Optional[int] = None
+    blocks: List[Block] = field(default_factory=list)
 
-    def children(self) -> Iterable[None]:
-        """Cells have no children."""
-        return []
+    def children(self) -> Iterable[Block]:
+        """Yield all block children of this cell."""
+        return self.blocks
 
     def text(self) -> str:
-        """Return the text value of the cell."""
+        """Return the concatenated text of all blocks, or text_value if no blocks."""
+        if self.blocks:
+            return '\n'.join(block.text() for block in self.blocks)
         return self.text_value
 
     @classmethod
-    def type(cls) -> str:
-        """Return the type name for this element."""
-        return "cell"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.CELL
 
 
 @dataclass
@@ -200,25 +237,27 @@ class Row(LayoutElement[Cell]):
         return '\t'.join(cell.text() for cell in self.cells)
 
     @classmethod
-    def type(cls) -> str:
-        """Return the type name for this element."""
-        return "row"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.ROW
 
 
 @dataclass
 class HeaderRow(Row):
     """Represents the header row of a table."""
-    def type(cls) -> str:
-        """Return the type name for this element."""
-        return "header_row"
+    @classmethod
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.HEADER_ROW
 
 
 @dataclass
 class BodyRow(Row):
     """Represents a body row of a table."""
-    def type(cls) -> str:
-        """Return the type name for this element."""
-        return "body_row"
+    @classmethod
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.BODY_ROW
 
 
 @dataclass
@@ -231,11 +270,10 @@ class Table(LayoutElement[Row]):
 
     def children(self) -> Iterable[Row]:
         """Return the header and body rows as children."""
-        children: List[Row] = []
         if self.header:
-            children.append(self.header)
-        children.extend(self.body)
-        return children
+            yield self.header
+            
+        yield from self.body
 
     def text(self) -> str:
         """Return the text of the table as TSV (header + body)."""
@@ -246,6 +284,6 @@ class Table(LayoutElement[Row]):
         return '\n'.join(rows)
 
     @classmethod
-    def type(cls) -> str:
-        """Return the type name for this element."""
-        return "table"
+    def type(cls) -> LayoutElementType:
+        """Return the type enum for this element."""
+        return LayoutElementType.TABLE
