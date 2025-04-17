@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Iterable, Dict, TypeVar, Generic, Any, TYPE_CHECKING, Union
 from enum import Enum, auto
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,7 @@ class Block(LayoutElement[Union['Table', 'Paragraph', 'Block']]):
     """
     Represents a block element, which can contain paragraphs, tables, or other blocks as children.
     """
-    elements: List[Union['Table', 'Paragraph', 'Block']]
+    elements: List['Table | Paragraph | Block']
     blockType: str
     confidence: float
     block_no: Optional[int] = None
@@ -272,15 +273,48 @@ class Table(LayoutElement[Row]):
         """Return the header and body rows as children."""
         if self.header:
             yield self.header
-            
         yield from self.body
 
+    def as_dataframe(self) -> pd.DataFrame:
+        """
+        Convert the table to a pandas DataFrame, using the header row (if present) as columns.
+        Returns:
+            pd.DataFrame: The table as a DataFrame.
+        """
+        # Get header values
+        if self.header:
+            columns = [cell.text() for cell in self.header.cells]
+        else:
+            # If no header, use default column names
+            if self.body and self.body[0].cells:
+                columns = [f"column_{i}" for i in range(len(self.body[0].cells))]
+            else:
+                columns = []
+        # Get body values
+        data = []
+        for row in self.body:
+            data.append([cell.text() for cell in row.cells])
+        return pd.DataFrame(data, columns=columns)
+
     def text(self) -> str:
-        """Return the text of the table as TSV (header + body)."""
+        """
+        Return the table as markdown using pandas DataFrame rendering.
+        Returns:
+            str: The table as a markdown string.
+        """
+        df = self.as_dataframe()
+        return df.to_markdown(index=False)
+
+    def raw_text(self) -> str:
+        """
+        Return the table as TSV using the inner text elements (legacy behavior).
+        Returns:
+            str: The table as TSV.
+        """
         rows = []
         if self.header:
-            rows.append(self.header.text())
-        rows.extend(row.text() for row in self.body)
+            rows.append('\t'.join(cell.text() for cell in self.header.cells))
+        rows.extend('\t'.join(cell.text() for cell in row.cells) for row in self.body)
         return '\n'.join(rows)
 
     @classmethod

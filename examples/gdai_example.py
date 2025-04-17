@@ -139,7 +139,7 @@ def main():
         print(f"\nText preview:\n{preview}")
         
         # Access original format
-        native_result = gdai_executor.get_native_result()
+        # native_result = gdai_executor.get_native_result()
         
         # Save results if requested
         if args.output:

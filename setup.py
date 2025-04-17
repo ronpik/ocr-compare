@@ -89,6 +89,7 @@ setup(
             "matplotlib",
             "numpy",
             "python-magic",
+            "pandas",
         ],
     },
     scripts=[
