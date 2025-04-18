@@ -336,7 +336,7 @@ def convert_documentai_to_ocr(documentai_result: Dict[str, Any]) -> OcrResult:
                     boundingBox=block_box,
                     element_path=block_path,
                     extra=block_extra,
-                    paragraphs=paragraphs,
+                    elements=paragraphs,
                     blockType="TEXT",  # Default type, DocumentAI doesn't specify block types as clearly
                     confidence=block_confidence,
                     block_no=block_idx
