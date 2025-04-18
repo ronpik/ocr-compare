@@ -22,6 +22,8 @@ from pathlib import Path
 from ocrtool import execute_ocr
 from ocrtool.ocr_impls.gdai import GoogleDocumentAIOcrExecutor, GoogleDocumentAILayoutExecutor
 from ocrtool.ocr_impls.gdai.gdai_config import GdaiConfig
+from ocrtool.document_scanner import DocumentScanner
+from ocrtool.scan import image_bytes_to_ndarray, ndarray_to_image_bytes
 
 
 def create_example_config(output_path: str):
@@ -52,6 +54,7 @@ def main():
     parser.add_argument("--create-config", help="Create an example configuration file at the specified path and exit")
     parser.add_argument("--output", help="Output file path for OCR results (JSON)", default=None)
     parser.add_argument("--layout", action="store_true", help="Use the layout processor instead of OCR processor")
+    parser.add_argument("--preprocess-align", action="store_true", help="Preprocess the document with DocumentScanner.align_document before OCR (image files only)")
     
     args = parser.parse_args()
     
@@ -70,8 +73,31 @@ def main():
         print(f"Error: Document file not found: {document_path}")
         return 1
         
-    with open(document_path, "rb") as f:
-        document_data = f.read()
+    # Preprocess with DocumentScanner.align_document if requested and file is an image
+    use_preprocess = args.preprocess_align
+    image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+    if use_preprocess and document_path.suffix.lower() in image_exts:
+        print("Preprocessing document with DocumentScanner.align_document...")
+        with open(document_path, "rb") as f:
+            image_bytes = f.read()
+        image = DocumentScanner.prepare_input(image_bytes)
+        if image is None:
+            print(f"Error: Could not decode image file: {document_path}")
+            return 1
+        scanner = DocumentScanner()
+        aligned = scanner.align_document(image)
+        if aligned is None:
+            print("Error: Document alignment failed. Proceeding with original image.")
+            document_data = image_bytes
+        else:
+            encoded_bytes = ndarray_to_image_bytes(aligned, ext='.png')
+            if encoded_bytes is None:
+                print("Error: Could not encode aligned image.")
+                return 1
+            document_data = encoded_bytes
+    else:
+        with open(document_path, "rb") as f:
+            document_data = f.read()
     
     # Load config from file or provide example usage message
     if not args.config:

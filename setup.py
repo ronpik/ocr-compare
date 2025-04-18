@@ -53,7 +53,7 @@ if any('magic' in arg or 'all' in arg for arg in sys.argv):
 
 setup(
     name="ocr-compare",
-    version="0.1.",
+    version="0.2.0",
     description="A tool for comparing OCR results from different OCR engines",
     author="OCR Compare Team",
     package_dir={"": "src"},
@@ -82,6 +82,10 @@ setup(
         "magic": [
             "python-magic",  # For MIME type detection
         ],
+        "scan": [
+            "opencv-python",
+            "numpy",
+        ],
         "all": [
             "pytesseract",
             "google-cloud-documentai",
@@ -90,6 +94,7 @@ setup(
             "numpy",
             "python-magic",
             "pandas",
+            "opencv-python",
         ],
     },
     scripts=[
