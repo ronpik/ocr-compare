@@ -13,7 +13,7 @@ Prerequisites:
 3. Install required packages:
    pip install google-cloud-documentai python-magic
 """
-
+from typing import Optional
 import argparse
 import json
 import os
@@ -22,8 +22,7 @@ from pathlib import Path
 from ocrtool import execute_ocr
 from ocrtool.ocr_impls.gdai import GoogleDocumentAIOcrExecutor, GoogleDocumentAILayoutExecutor
 from ocrtool.ocr_impls.gdai.gdai_config import GdaiConfig
-from ocrtool.document_scanner import DocumentScanner
-from ocrtool.scan import image_bytes_to_ndarray, ndarray_to_image_bytes
+from ocrtool.scan import DocumentScanner, ndarray_to_image_bytes
 
 
 def create_example_config(output_path: str):
@@ -45,6 +44,26 @@ def create_example_config(output_path: str):
     
     print(f"Example configuration written to {output_path}")
     print("Please edit this file with your actual Google Document AI settings.")
+
+
+def preprocess_document_image(document_data: bytes, document_path: str) -> Optional[bytes]:
+    image = DocumentScanner.prepare_input(document_data)
+    if image is None:
+        print(f"Error: Could not decode image file: {document_path}")
+        return None
+    
+    scanner = DocumentScanner()
+    aligned = scanner.align_document(image)
+    if aligned is None:
+        print("Error: Document alignment failed. Proceeding with original image.")
+        return document_data
+        
+    encoded_bytes = ndarray_to_image_bytes(aligned, ext='.png')
+    if encoded_bytes is None:
+        print("Error: Could not encode aligned image.")
+        return None
+        
+    return encoded_bytes
 
 
 def main():
@@ -74,30 +93,18 @@ def main():
         return 1
         
     # Preprocess with DocumentScanner.align_document if requested and file is an image
+    # Load document data
+    with open(document_path, "rb") as f:
+        document_data = f.read()
+
+    # Preprocess with DocumentScanner if requested and file is an image
     use_preprocess = args.preprocess_align
     image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
     if use_preprocess and document_path.suffix.lower() in image_exts:
         print("Preprocessing document with DocumentScanner.align_document...")
-        with open(document_path, "rb") as f:
-            image_bytes = f.read()
-        image = DocumentScanner.prepare_input(image_bytes)
-        if image is None:
-            print(f"Error: Could not decode image file: {document_path}")
+        document_data = preprocess_document_image(document_data, document_path)
+        if document_data is None:
             return 1
-        scanner = DocumentScanner()
-        aligned = scanner.align_document(image)
-        if aligned is None:
-            print("Error: Document alignment failed. Proceeding with original image.")
-            document_data = image_bytes
-        else:
-            encoded_bytes = ndarray_to_image_bytes(aligned, ext='.png')
-            if encoded_bytes is None:
-                print("Error: Could not encode aligned image.")
-                return 1
-            document_data = encoded_bytes
-    else:
-        with open(document_path, "rb") as f:
-            document_data = f.read()
     
     # Load config from file or provide example usage message
     if not args.config:
