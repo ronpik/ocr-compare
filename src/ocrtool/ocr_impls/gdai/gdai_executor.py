@@ -60,25 +60,6 @@ class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
         credentials, _ = google.auth.default()
         return credentials
 
-    def execute_ocr(self, image_data: bytes, **kwargs) -> OcrResult:
-        """
-        Execute OCR and convert the results to canonical format. Checks page limit for PDFs.
-
-        Args:
-            image_data: Raw bytes of the image
-            **kwargs: Additional implementation-specific parameters
-
-        Returns:
-            OcrResult: Results in canonical schema format
-        """
-        if self.page_limit is not None and is_pdf(image_data):
-            num_pages = count_pdf_pages(image_data)
-            if num_pages > self.page_limit:
-                raise PageLimitExceededError(
-                    f"PDF has {num_pages} pages, exceeds limit of {self.page_limit}."
-                )
-        return super().execute_ocr(image_data, **kwargs)
-
     def execute_ocr_original(self, image_data: bytes, **kwargs) -> Dict[str, Any]:
         mime_type = kwargs.get('mime_type')
         if not mime_type:
@@ -199,26 +180,6 @@ class GoogleDocumentAIOcrExecutor(GoogleDocumentAIBaseExecutor):
             "version": "1.0.0",
             "description": "Google Cloud Document AI OCR engine"
         }
-
-    def execute_ocr(self, image_data: bytes, **kwargs) -> OcrResult:
-        """
-        Execute OCR and convert the results to canonical format. Splits PDFs if needed.
-
-        Args:
-            image_data: Raw bytes of the image
-            **kwargs: Additional implementation-specific parameters
-
-        Returns:
-            OcrResult: Results in canonical schema format
-        """
-        if is_pdf(image_data) and self.page_limit is not None:
-            num_pages = count_pdf_pages(image_data)
-            if num_pages > self.page_limit:
-                segments = split_pdf_to_segments(image_data, self.page_limit)
-                super_execute_ocr = super().execute_ocr
-                results = [super_execute_ocr(seg, **kwargs) for seg in segments]
-                return self._combine_ocr_results(results)
-        return super().execute_ocr(image_data, **kwargs)
 
     @staticmethod
     def _combine_ocr_results(results: list[OcrResult]) -> OcrResult:

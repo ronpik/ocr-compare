@@ -1,13 +1,56 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
-import logging
+from typing import Any, Dict, Optional, List
+from dataclasses import dataclass, replace, is_dataclass
 import time
+from pathlib import Path
+
+from globalog import LOG
 
 from ocrtool.canonical_ocr.ocr_schema import OcrResult, Document
 from ocrtool.page_limit.page_limit_handler import PageLimitHandler
 from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 from ocrtool.page_limit.page_count import is_pdf, count_pdf_pages, split_pdf_to_segments
 
+
+
+
+
+@dataclass
+class OcrResultSummary:
+    """
+    Summary statistics for an OcrResult, for logging and reporting.
+    """
+    num_pages: int
+    num_blocks: int
+    num_tables: int
+    num_symbols: int
+    num_characters: int
+
+    @classmethod
+    def from_ocr_result(cls, result: OcrResult) -> "OcrResultSummary":
+        num_pages = len(result.document.pages)
+        num_blocks = 0
+        num_tables = 0
+        num_symbols = 0
+        num_characters = 0
+        for page in result.document.pages:
+            for block in getattr(page, 'blocks', []):
+                num_blocks += 1
+                if getattr(block, 'blockType', None) == 'TABLE':
+                    num_tables += 1
+                for para in getattr(block, 'paragraphs', []):
+                    for line in getattr(para, 'lines', []):
+                        for word in getattr(line, 'words', []):
+                            for symbol in getattr(word, 'symbols', []):
+                                num_symbols += 1
+                                num_characters += len(getattr(symbol, 'text_value', '') or '')
+        return cls(
+            num_pages=num_pages,
+            num_blocks=num_blocks,
+            num_tables=num_tables,
+            num_symbols=num_symbols,
+            num_characters=num_characters,
+        )
 
 class OcrExecutor(ABC):
     """
@@ -126,66 +169,103 @@ class ExternalOcrExecutor(OcrExecutor):
         Returns:
             OcrResult: Results in canonical schema format
         """
-        logger = logging.getLogger(__name__)
+        start_time = time.time()
         if is_pdf(image_data) and self.page_limit is not None:
             num_pages = count_pdf_pages(image_data)
-            logger.info(f"Detected PDF with {num_pages} pages. Page limit for {self.type.name}: {self.page_limit}.")
+            LOG.info(f"Detected PDF with {num_pages} pages. Page limit for this executor: {self.page_limit}.")
             if num_pages > self.page_limit:
-                logger.warning(f"PDF exceeds page limit ({num_pages} > {self.page_limit}). Splitting into segments.")
+                LOG.info(f"Splitting PDF: {num_pages} pages exceeds limit of {self.page_limit}. Splitting will be applied.")
                 segments = split_pdf_to_segments(image_data, self.page_limit)
-                logger.info(f"Split PDF into {len(segments)} segments of up to {self.page_limit} pages each.")
+                LOG.info(f"Splitting complete: PDF split into {len(segments)} segments of up to {self.page_limit} pages each.")
                 super_execute_ocr = super().execute_ocr
-                start_time = time.time()
-                results = [super_execute_ocr(seg, **kwargs) for seg in segments]
-                elapsed = time.time() - start_time
+                results: List[OcrResult] = []
+                for idx, seg in enumerate(segments):
+                    LOG.info(f"Processing segment {idx+1}/{len(segments)}...")
+                    seg_start = time.time()
+                    seg_original_result =self.execute_ocr_original(seg, **kwargs)
+                    seg_result = self.convert_to_canonical(seg_original_result)
+                    seg_time = time.time() - seg_start
+
+                    seg_summary = OcrResultSummary.from_ocr_result(seg_result)
+                    LOG.info(
+                        f"Segment {idx+1} processed in {seg_time:.2f}s: "
+                        f"pages={seg_summary.num_pages}, blocks={seg_summary.num_blocks}, "
+                        f"tables={seg_summary.num_tables}, symbols={seg_summary.num_symbols}, "
+                        f"characters={seg_summary.num_characters}"
+                    )
+                    results.append(seg_result)
                 combined = self._combine_ocr_results(results)
-                self._log_ocr_result_summary(combined, elapsed, num_pages)
+                total_time = time.time() - start_time
+                summary = OcrResultSummary.from_ocr_result(combined)
+                LOG.info(
+                    f"Combined result: pages={summary.num_pages}, blocks={summary.num_blocks}, "
+                    f"tables={summary.num_tables}, symbols={summary.num_symbols}, "
+                    f"characters={summary.num_characters}, total_time={total_time:.2f}s"
+                )
                 return combined
-        start_time = time.time()
         try:
+            LOG.info("Starting OCR processing...")
             native_result = self.execute_ocr_original(image_data, **kwargs)
+            LOG.info("OCR processing complete. Converting to canonical format...")
+            result = self.convert_to_canonical(native_result)
+            elapsed = time.time() - start_time
+            summary = OcrResultSummary.from_ocr_result(result)
+            LOG.info(
+                f"OCR complete: pages={summary.num_pages}, blocks={summary.num_blocks}, "
+                f"tables={summary.num_tables}, symbols={summary.num_symbols}, "
+                f"characters={summary.num_characters}, elapsed={elapsed:.2f}s"
+            )
+            return result
         except Exception as exc:
-            logger.exception("Exception during OCR execution.")
+            LOG.error("Error during OCR processing", exc_info=exc)
             if self.handle_page_limit and self._page_limit_handler and self._page_limit_handler.is_page_limit_error(exc):
                 return self._page_limit_handler.handle(exc, image_data, self, **kwargs)
             raise
-        elapsed = time.time() - start_time
-        canonical = self.convert_to_canonical(native_result)
-        self._log_ocr_result_summary(canonical, elapsed, 1)
-        return canonical
 
     @staticmethod
     def _combine_ocr_results(results: list[OcrResult]) -> OcrResult:
         """
-        Combine multiple OcrResult objects by concatenating their pages.
+        Combine multiple OcrResult objects by concatenating their pages, renumbering pages and updating element_path for all layout elements using dataclasses.replace.
         """
         if not results:
             return OcrResult(document=Document(pages=[]))
-        base = results[0]
         all_pages = []
         for result in results:
             all_pages.extend(result.document.pages)
-        base.document.pages = all_pages
+        renumbered_pages = ExternalOcrExecutor._renumber_and_repath_pages(all_pages)
+        base = results[0]
+        base.document.pages = renumbered_pages
         return base
 
     @staticmethod
-    def _log_ocr_result_summary(result: OcrResult, elapsed: float, num_pages: int) -> None:
+    def _renumber_and_repath_pages(pages: list) -> list:
         """
-        Log a summary of the OcrResult including number of pages, blocks, tables, symbols, and processing time.
+        Renumber pages and update element_path for all layout elements recursively using dataclasses.replace.
         """
-        logger = logging.getLogger(__name__)
-        doc = result.document
-        n_pages = len(getattr(doc, 'pages', []))
-        n_blocks = sum(len(getattr(page, 'blocks', [])) for page in getattr(doc, 'pages', []))
-        n_tables = sum(len(getattr(page, 'tables', [])) for page in getattr(doc, 'pages', []) if hasattr(page, 'tables'))
-        n_symbols = 0
-        for page in getattr(doc, 'pages', []):
-            for block in getattr(page, 'blocks', []):
-                for para in getattr(block, 'paragraphs', []):
-                    for line in getattr(para, 'lines', []):
-                        for word in getattr(line, 'words', []):
-                            n_symbols += len(getattr(word, 'symbols', []))
-        logger.info(
-            f"OCR processed {num_pages} input pages in {elapsed:.2f}s. "
-            f"Result: {n_pages} canonical pages, {n_blocks} blocks, {n_tables} tables, {n_symbols} symbols."
-        )
+        def update_element_path(element, new_page_no: int):
+            if not hasattr(element, 'element_path') or element.element_path is None:
+                return element
+            
+            parts = list(element.element_path.parts)
+            if len(parts) > 1:
+                parts[1] = str(new_page_no)
+                new_path = Path(*parts)
+                element = replace(element, element_path=new_path)
+            
+            # Recursively update children fields
+            for field_name, field_def in getattr(element, '__dataclass_fields__', {}).items():
+                value = getattr(element, field_name)
+                if isinstance(value, list):
+                    new_list = [update_element_path(child, new_page_no) for child in value]
+                    element = replace(element, **{field_name: new_list})
+                elif is_dataclass(value) and hasattr(value, 'element_path'):
+                    element = replace(element, **{field_name: update_element_path(value, new_page_no)})
+            
+            return element
+        
+        new_pages = []
+        for new_page_no, page in enumerate(pages, 1):
+            page = replace(page, page_no=new_page_no)
+            page = update_element_path(page, new_page_no)
+            new_pages.append(page)
+        return new_pages
