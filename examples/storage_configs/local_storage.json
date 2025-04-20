@@ -1,0 +1,6 @@
+{
+    "storage_type": "LOCAL",
+    "storage_config": {
+        "root_dir": "/tmp/ocr_cache"
+    }
+}
