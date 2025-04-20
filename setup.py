@@ -61,7 +61,8 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "pillow",  # Required for image processing,
-        "python-dstools"
+        "python-dstools",
+        "PyPDF2",  # Required for PDF splitting and page counting
     ],
     extras_require={
         "tesseract": ["pytesseract"],
@@ -95,6 +96,7 @@ setup(
             "python-magic",
             "pandas",
             "opencv-python",
+            "PyPDF2",
         ],
     },
     scripts=[

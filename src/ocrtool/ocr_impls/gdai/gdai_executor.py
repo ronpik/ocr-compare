@@ -6,18 +6,31 @@ from google.cloud import documentai_v1 as documentai
 from google.oauth2 import service_account
 from google.protobuf.json_format import MessageToDict
 
-from ocrtool.canonical_ocr.ocr_schema import OcrResult
+from ocrtool.canonical_ocr.ocr_schema import OcrResult, Document
 from ocrtool.ocr_impls.gdai import GdaiConfig
 from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_convert import process_documentai_result
 from ocrtool.ocr_impls.gdai.gdai_layout_executor import process_layout_result
+from ocrtool.page_limit.page_count import is_pdf, count_pdf_pages, split_pdf_to_segments
+from ocrtool.page_limit.exceptions import PageLimitExceededError
+from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 
 class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
     """
     Base executor for Google Document AI processors (OCR, Layout, etc).
     Handles client setup, credentials, and request execution.
     """
-    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None):
+    page_limit: int | None = None  # Default: no limit, override in subclasses
+
+    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None, handle_page_limit: bool = True) -> None:
+        """
+        Initialize the Google Document AI base executor.
+
+        Args:
+            config: Configuration for the executor.
+            handle_page_limit: Whether to handle page limit errors automatically (default: True)
+        """
+        super().__init__(handle_page_limit=handle_page_limit)
         if isinstance(config, dict):
             self.config = GdaiConfig(**config)
         else:
@@ -46,6 +59,25 @@ class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
         import google.auth
         credentials, _ = google.auth.default()
         return credentials
+
+    def execute_ocr(self, image_data: bytes, **kwargs) -> OcrResult:
+        """
+        Execute OCR and convert the results to canonical format. Checks page limit for PDFs.
+
+        Args:
+            image_data: Raw bytes of the image
+            **kwargs: Additional implementation-specific parameters
+
+        Returns:
+            OcrResult: Results in canonical schema format
+        """
+        if self.page_limit is not None and is_pdf(image_data):
+            num_pages = count_pdf_pages(image_data)
+            if num_pages > self.page_limit:
+                raise PageLimitExceededError(
+                    f"PDF has {num_pages} pages, exceeds limit of {self.page_limit}."
+                )
+        return super().execute_ocr(image_data, **kwargs)
 
     def execute_ocr_original(self, image_data: bytes, **kwargs) -> Dict[str, Any]:
         mime_type = kwargs.get('mime_type')
@@ -123,10 +155,33 @@ class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
         """
         raise NotImplementedError
 
+    @property
+    def type(self) -> OcrExecutorType:
+        # Default to online; subclasses should override if needed
+        return OcrExecutorType.DOCUMENT_AI_ONLINE
+
 class GoogleDocumentAIOcrExecutor(GoogleDocumentAIBaseExecutor):
     """
     OCR executor implementation using Google Document AI OCR processor.
     """
+    @property
+    def type(self) -> OcrExecutorType:
+        return OcrExecutorType.DOCUMENT_AI_ONLINE
+
+    @property
+    def page_limit(self) -> int | None:
+        return get_page_limit(self.type)
+
+    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None, handle_page_limit: bool = True) -> None:
+        """
+        Initialize the Google Document AI OCR executor.
+
+        Args:
+            config: Configuration for the executor.
+            handle_page_limit: Whether to handle page limit errors automatically (default: True)
+        """
+        super().__init__(config=config, handle_page_limit=handle_page_limit)
+
     def _get_process_options(self):
         return documentai.ProcessOptions(
             ocr_config=documentai.OcrConfig(
@@ -145,10 +200,48 @@ class GoogleDocumentAIOcrExecutor(GoogleDocumentAIBaseExecutor):
             "description": "Google Cloud Document AI OCR engine"
         }
 
+    def execute_ocr(self, image_data: bytes, **kwargs) -> OcrResult:
+        """
+        Execute OCR and convert the results to canonical format. Splits PDFs if needed.
+
+        Args:
+            image_data: Raw bytes of the image
+            **kwargs: Additional implementation-specific parameters
+
+        Returns:
+            OcrResult: Results in canonical schema format
+        """
+        if is_pdf(image_data) and self.page_limit is not None:
+            num_pages = count_pdf_pages(image_data)
+            if num_pages > self.page_limit:
+                segments = split_pdf_to_segments(image_data, self.page_limit)
+                super_execute_ocr = super().execute_ocr
+                results = [super_execute_ocr(seg, **kwargs) for seg in segments]
+                return self._combine_ocr_results(results)
+        return super().execute_ocr(image_data, **kwargs)
+
+    @staticmethod
+    def _combine_ocr_results(results: list[OcrResult]) -> OcrResult:
+        """
+        Combine multiple OcrResult objects by concatenating their pages.
+        """
+        if not results:
+            return OcrResult(document=Document(pages=[]))
+        base = results[0]
+        all_pages = []
+        for result in results:
+            all_pages.extend(result.document.pages)
+        base.document.pages = all_pages
+        return base
+
 class GoogleDocumentAILayoutExecutor(GoogleDocumentAIBaseExecutor):
     """
     Layout executor implementation using Google Document AI Layout processor.
     """
+    @property
+    def type(self) -> OcrExecutorType:
+        return OcrExecutorType.DOCUMENT_AI_BATCH_LAYOUT_PARSER
+
     def _get_process_options(self):
         return documentai.ProcessOptions(
             layout_config=documentai.ProcessOptions.LayoutConfig(

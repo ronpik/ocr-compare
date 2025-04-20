@@ -8,6 +8,9 @@ from ocrtool.canonical_ocr.ocr_schema import (
     BoundingBox, Symbol, Word, Line, Paragraph, Block, Page, Document, OcrResult
 )
 from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
+from ocrtool.page_limit.page_count import is_pdf, count_pdf_pages, split_pdf_to_segments
+from ocrtool.page_limit.exceptions import PageLimitExceededError
+from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 
 
 class TesseractOcrExecutor(ExternalOcrExecutor):
@@ -15,7 +18,15 @@ class TesseractOcrExecutor(ExternalOcrExecutor):
     OCR executor implementation using Tesseract OCR.
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    @property
+    def type(self) -> OcrExecutorType:
+        return OcrExecutorType.TESSERACT
+
+    @property
+    def page_limit(self) -> int | None:
+        return get_page_limit(self.type)
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None, handle_page_limit: bool = True) -> None:
         """
         Initialize the Tesseract OCR executor.
         
@@ -24,7 +35,9 @@ class TesseractOcrExecutor(ExternalOcrExecutor):
                 - lang: Language code (default: 'eng')
                 - config: Tesseract configuration string
                 - timeout: Timeout in seconds
+            handle_page_limit: Whether to handle page limit errors automatically (default: True)
         """
+        super().__init__(handle_page_limit=handle_page_limit)
         self.config = config or {}
         self.lang = self.config.get('lang', 'eng')
         self.tesseract_config = self.config.get('config', '')

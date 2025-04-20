@@ -4,8 +4,11 @@ from typing import Any, Dict
 
 from dstools.storage.handlers.storage_handler import StorageHandler
 
-from ocrtool.canonical_ocr.ocr_schema import OcrResult
+from ocrtool.canonical_ocr.ocr_schema import OcrResult, Document
 from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
+from ocrtool.page_limit.page_count import is_pdf, count_pdf_pages, split_pdf_to_segments
+from ocrtool.page_limit.exceptions import PageLimitExceededError
+from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 
 
 
@@ -19,8 +22,9 @@ class CachedOcrExecutor(ExternalOcrExecutor):
         self,
         decorated_executor: ExternalOcrExecutor,
         storage_handler: StorageHandler,
-        cache_prefix: str
-    ):
+        cache_prefix: str,
+        handle_page_limit: bool = True
+    ) -> None:
         """
         Initialize the CachedOcrExecutor with a decorated executor and storage handler.
         
@@ -28,12 +32,26 @@ class CachedOcrExecutor(ExternalOcrExecutor):
             decorated_executor: The OcrExecutor to be decorated with caching
             storage_handler: The storage handler to use for caching
             cache_prefix: The prefix path in the storage where cache files will be stored
+            handle_page_limit: Whether to handle page limit errors automatically (default: True)
         """
+        # If possible, set the flag on the decorated executor
+        if hasattr(decorated_executor, 'handle_page_limit'):
+            decorated_executor.handle_page_limit = handle_page_limit
         self._executor = decorated_executor
         self._storage = storage_handler
         self._cache_prefix = cache_prefix
         self._last_result = None
         
+        # Set page_limit to the decorated executor's limit if available
+        self.page_limit = getattr(decorated_executor, 'page_limit', None)
+        
+    @property
+    def type(self) -> OcrExecutorType:
+        # Use the decorated executor's type if available
+        if hasattr(self._executor, 'type'):
+            return self._executor.type
+        raise NotImplementedError("Decorated executor must define a type property.")
+    
     def execute_ocr_original(self, image_data: bytes, **kwargs) -> Dict[str, Any]:
         """
         Execute OCR with caching. Tries to fetch from cache first, falls back to 
@@ -189,3 +207,4 @@ class CachedOcrExecutor(ExternalOcrExecutor):
         except Exception as e:
             # Log the error but continue
             print(f"Error caching OCR result: {str(e)}")
+        
