@@ -371,10 +371,43 @@ class OcrResultSummary:
                 if hasattr(block, 'page_span') and block.page_span[1] is not None:
                     max_end_page = max(max_end_page, block.page_span[1])
 
-                for para in block.elements or []:
-                    for line in para.lines or []:
-                        for word in line.words or []:
-                            num_words += 1
+                for element in block.elements or []:
+                    # Handle different element types appropriately
+                    if isinstance(element, Paragraph):
+                        # Process Paragraph objects with lines
+                        for line in element.lines or []:
+                            for word in line.words or []:
+                                num_words += 1
+                    elif isinstance(element, Table):
+                        # Process Table objects by iterating through rows and cells
+                        if element.header:
+                            for cell in element.header.cells or []:
+                                # Count words in header cells
+                                for b in cell.blocks or []:
+                                    for p in b.elements or []:
+                                        if isinstance(p, Paragraph):
+                                            for line in p.lines or []:
+                                                for word in line.words or []:
+                                                    num_words += 1
+                        
+                        # Process body rows
+                        for row in element.body or []:
+                            for cell in row.cells or []:
+                                # Count words in body cells
+                                for b in cell.blocks or []:
+                                    for p in b.elements or []:
+                                        if isinstance(p, Paragraph):
+                                            for line in p.lines or []:
+                                                for word in line.words or []:
+                                                    num_words += 1
+                    elif isinstance(element, Block):
+                        # Process nested Block objects recursively
+                        # This is a simplified approach; a complete solution might need a recursive function
+                        for sub_element in element.elements or []:
+                            if isinstance(sub_element, Paragraph):
+                                for line in sub_element.lines or []:
+                                    for word in line.words or []:
+                                        num_words += 1
                             
         num_layout_pages = len(result.document.pages)
         num_pages = max(num_layout_pages, max_end_page)
