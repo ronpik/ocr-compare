@@ -1,0 +1,39 @@
+# IDEs
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build files
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.env/
+.venv/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test and coverage
+htmlcov/
+.tox/
+.coverage
+.cache
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+CLAUDE.md
+.cursor/*

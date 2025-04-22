@@ -6,31 +6,27 @@ from google.cloud import documentai_v1 as documentai
 from google.oauth2 import service_account
 from google.protobuf.json_format import MessageToDict
 
-from ocrtool.canonical_ocr.ocr_schema import OcrResult
+from ocrtool.canonical_ocr.ocr_schema import OcrResult, Document
 from ocrtool.ocr_impls.gdai import GdaiConfig
 from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_convert import process_documentai_result
+from ocrtool.ocr_impls.gdai.gdai_layout_executor import process_layout_result
+from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 
-
-class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
+class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
     """
-    OCR executor implementation using Google Document AI.
+    Base executor for Google Document AI processors (OCR, Layout, etc).
+    Handles client setup, credentials, and request execution.
     """
-    
-    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None):
+    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None, handle_page_limit: bool = True) -> None:
         """
-        Initialize the Google Document AI OCR executor.
-        
+        Initialize the Google Document AI base executor.
+
         Args:
-            config: Configuration parameters for Google Document AI
-                - processor_name: Full resource name of the processor to use (required)
-                - credentials: One of the following:
-                    - service_account_file: Path to service account JSON file
-                    - service_account_info: Service account info as dictionary
-                    - credentials: google.oauth2.credentials.Credentials object
-                - location: API endpoint location (default: "us")
-                - timeout: Timeout in seconds for API calls (default: 300)
+            config: Configuration for the executor.
+            handle_page_limit: Whether to handle page limit errors automatically (default: True)
         """
+        super().__init__(handle_page_limit=handle_page_limit)
         if isinstance(config, dict):
             self.config = GdaiConfig(**config)
         else:
@@ -39,101 +35,46 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
         self.processor_name = self.config.processor_name
         self.location = self.config.location
         self.timeout = self.config.timeout
-        
-        # Set up credentials
         self.credentials = self._setup_credentials()
-        
-        # Set up client
         api_endpoint = f"{self.location}-documentai.googleapis.com"
         self.client = documentai.DocumentProcessorServiceClient(
             credentials=self.credentials,
             client_options=ClientOptions(api_endpoint=api_endpoint)
         )
-        
-        # Store the most recent native result
         self._last_result = None
-    
-    def _setup_credentials(self):
-        """
-        Set up Google Cloud credentials based on the provided configuration.
-        
-        Returns:
-            google.auth.credentials.Credentials: The credentials to use for API calls
-        """
 
+    def _setup_credentials(self):
         if self.config.service_account_file:
             return service_account.Credentials.from_service_account_file(
                 self.config.service_account_file
             )
-        
-        # Check for service account info as dictionary
         if self.config.service_account_info:
             return service_account.Credentials.from_service_account_info(
                 self.config.service_account_info
             )
-        
-        # Use default credentials if no specific credentials provided
         import google.auth
         credentials, _ = google.auth.default()
         return credentials
-    
+
     def execute_ocr_original(self, image_data: bytes, **kwargs) -> Dict[str, Any]:
-        """
-        Execute OCR on the provided image data and return results in native format
-        as a JSON-serializable dictionary.
-        
-        Args:
-            image_data: Raw bytes of the image
-            **kwargs: Additional implementation-specific parameters
-                - mime_type: MIME type of the input (default: auto-detected)
-                - timeout: Override the default timeout in seconds
-                
-        Returns:
-            Dict[str, Any]: The Document AI OCR result as a JSON-serializable dictionary
-        """
-        # Determine MIME type
         mime_type = kwargs.get('mime_type')
         if not mime_type:
-            # Try to auto-detect MIME type
             mime_type = self._detect_mime_type(image_data)
-        
-        # Get timeout from kwargs or use default
         timeout = kwargs.get('timeout', self.timeout)
-        
-        # Create raw document
         raw_document = documentai.RawDocument(
             content=image_data,
             mime_type=mime_type
         )
-        selected_pages = kwargs.get('selected_pages')
-
-        process_options = documentai.ProcessOptions(
-            # individual_page_selector=documentai.ProcessOptions.IndividualPageSelector(
-            #     pages=[1, 2, 3]  # Optional: specify pages if needed
-            # ),
-            # This enables imageless mode
-            ocr_config=documentai.OcrConfig(
-                enable_image_quality_scores=False,  # This is the key change
-
-            )
-        )
-
-        
-        # Create process request
+        process_options = self._get_process_options()
         request = documentai.ProcessRequest(
             name=self.processor_name,
             raw_document=raw_document,
             skip_human_review=True,
-            process_options=process_options,
+            # process_options=process_options,
         )
-        
-        # Process the document
         result = self.client.process_document(request=request, timeout=timeout)
-        
-        # Convert to dictionary for easier processing
         result_dict = MessageToDict(result._pb)
         
-        # MessageToDict already ensures JSON serializable output, but verify and sanitize if needed
         def sanitize_for_json(obj):
             if isinstance(obj, dict):
                 return {k: sanitize_for_json(v) for k, v in obj.items()}
@@ -142,68 +83,18 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
             elif isinstance(obj, (str, int, float, bool, type(None))):
                 return obj
             else:
-                # Convert any non-JSON serializable types to strings
                 return str(obj)
-        
-        # Sanitize the result to ensure it's JSON serializable
+            
         json_safe_result = sanitize_for_json(result_dict)
         self._last_result = json_safe_result
-        
         return json_safe_result
-    
-    def convert_to_canonical(self, native_result: Dict[str, Any]) -> OcrResult:
-        """
-        Convert the Document AI result to canonical schema format.
-        
-        Args:
-            native_result: Document AI result in its native dictionary format
-                         (JSON-serializable dictionary)
-            
-        Returns:
-            OcrResult: Results in canonical schema format
-        """
-        self._last_result = native_result
-        return process_documentai_result(native_result)
-    
-    def get_native_result(self) -> Any:
-        """
-        Return the native result from the most recent OCR execution.
-        
-        Returns:
-            Dict: The Document AI OCR result in its native dictionary format
-        """
-        return self._last_result
-    
-    def get_implementation_info(self) -> Dict[str, str]:
-        """
-        Return information about this OCR implementation.
-        
-        Returns:
-            Dict[str, str]: Information about the implementation
-        """
-        return {
-            "name": "Google Document AI",
-            "version": "1.0.0",
-            "description": "Google Cloud Document AI OCR engine"
-        }
-    
+
     def _detect_mime_type(self, data: bytes) -> str:
-        """
-        Detect MIME type from image data.
-        
-        Args:
-            data: Raw bytes of the image
-            
-        Returns:
-            str: MIME type (e.g., 'application/pdf', 'image/jpeg')
-        """
         import magic
         try:
-            # Try to use python-magic if available
             mime_type = magic.from_buffer(data, mime=True)
             return mime_type
         except ImportError:
-            # Fall back to basic detection
             if data.startswith(b'%PDF'):
                 return 'application/pdf'
             elif data.startswith(b'\xff\xd8'):
@@ -217,5 +108,114 @@ class GoogleDocumentAIOcrExecutor(ExternalOcrExecutor):
             elif data.startswith(b'II*\x00') or data.startswith(b'MM\x00*'):
                 return 'image/tiff'
             else:
-                # Default to PDF if unable to detect
                 return 'application/pdf'
+
+    def get_native_result(self) -> Any:
+        return self._last_result
+
+    def get_implementation_info(self) -> Dict[str, str]:
+        return {
+            "name": "Google Document AI (Base)",
+            "version": "1.0.0",
+            "description": "Google Cloud Document AI base executor"
+        }
+
+    def _get_process_options(self):
+        """
+        Subclasses should override this to provide processor-specific options.
+        """
+        raise NotImplementedError
+
+    def convert_to_canonical(self, native_result: Dict[str, Any]) -> OcrResult:
+        """
+        Subclasses should override this to provide processor-specific conversion.
+        """
+        raise NotImplementedError
+
+    @property
+    def type(self) -> OcrExecutorType:
+        # Default to online; subclasses should override if needed
+        return OcrExecutorType.DOCUMENT_AI_ONLINE
+
+class GoogleDocumentAIOcrExecutor(GoogleDocumentAIBaseExecutor):
+    """
+    OCR executor implementation using Google Document AI OCR processor.
+    """
+    @property
+    def type(self) -> OcrExecutorType:
+        return OcrExecutorType.DOCUMENT_AI_ONLINE
+
+    @property
+    def page_limit(self) -> int | None:
+        return get_page_limit(self.type)
+
+    def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None, handle_page_limit: bool = True) -> None:
+        """
+        Initialize the Google Document AI OCR executor.
+
+        Args:
+            config: Configuration for the executor.
+            handle_page_limit: Whether to handle page limit errors automatically (default: True)
+        """
+        super().__init__(config=config, handle_page_limit=handle_page_limit)
+
+    def _get_process_options(self):
+        return documentai.ProcessOptions(
+            ocr_config=documentai.OcrConfig(
+                enable_image_quality_scores=False,
+            )
+        )
+
+    def convert_to_canonical(self, native_result: Dict[str, Any]) -> OcrResult:
+        self._last_result = native_result
+        return process_documentai_result(native_result)
+
+    def get_implementation_info(self) -> Dict[str, str]:
+        return {
+            "name": "Google Document AI OCR",
+            "version": "1.0.0",
+            "description": "Google Cloud Document AI OCR engine"
+        }
+
+    @staticmethod
+    def _combine_ocr_results(results: list[OcrResult]) -> OcrResult:
+        """
+        Combine multiple OcrResult objects by concatenating their pages.
+        """
+        if not results:
+            return OcrResult(document=Document(pages=[]))
+        base = results[0]
+        all_pages = []
+        for result in results:
+            all_pages.extend(result.document.pages)
+        base.document.pages = all_pages
+        return base
+
+class GoogleDocumentAILayoutExecutor(GoogleDocumentAIBaseExecutor):
+    """
+    Layout executor implementation using Google Document AI Layout processor.
+    """
+    @property
+    def type(self) -> OcrExecutorType:
+        return OcrExecutorType.DOCUMENT_AI_LAYOUT_PARSER
+
+    def _get_process_options(self):
+        return documentai.ProcessOptions(
+            layout_config=documentai.ProcessOptions.LayoutConfig(
+                chunking_config=documentai.ProcessOptions.LayoutConfig.ChunkingConfig(
+                    chunk_size=1000,
+                    include_ancestor_headings=True,
+                )
+            )
+        )
+
+    def convert_to_canonical(self, native_result: Dict[str, Any]) -> OcrResult:
+        self._last_result = native_result
+        return process_layout_result(native_result)
+
+    def get_implementation_info(self) -> Dict[str, str]:
+        return {
+            "name": "Google Document AI Layout",
+            "version": "1.0.0",
+            "description": "Google Cloud Document AI Layout engine"
+        }

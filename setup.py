@@ -53,7 +53,7 @@ if any('magic' in arg or 'all' in arg for arg in sys.argv):
 
 setup(
     name="ocr-compare",
-    version="0.1.2",
+    version="0.2.0",
     description="A tool for comparing OCR results from different OCR engines",
     author="OCR Compare Team",
     package_dir={"": "src"},
@@ -61,7 +61,8 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "pillow",  # Required for image processing,
-        "python-dstools"
+        "python-dstools",
+        "PyPDF2",  # Required for PDF splitting and page counting
     ],
     extras_require={
         "tesseract": ["pytesseract"],
@@ -82,6 +83,10 @@ setup(
         "magic": [
             "python-magic",  # For MIME type detection
         ],
+        "scan": [
+            "opencv-python",
+            "numpy",
+        ],
         "all": [
             "pytesseract",
             "google-cloud-documentai",
@@ -89,6 +94,9 @@ setup(
             "matplotlib",
             "numpy",
             "python-magic",
+            "pandas",
+            "opencv-python",
+            "PyPDF2",
         ],
     },
     scripts=[
