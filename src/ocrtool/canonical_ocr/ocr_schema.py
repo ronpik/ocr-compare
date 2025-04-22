@@ -2,7 +2,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Iterable, Dict, TypeVar, Generic, Any, TYPE_CHECKING, Union
+from typing import List, Optional, Iterable, Dict, TypeVar, Generic, Any, TYPE_CHECKING, Union, Tuple
 from enum import Enum, auto
 import pandas as pd
 
@@ -136,6 +136,7 @@ class Block(LayoutElement[Union['Table', 'Paragraph', 'Block']]):
     blockType: str
     confidence: float
     block_no: Optional[int] = None
+    page_span: Tuple[int, int] = (-1, -1)
 
     def children(self) -> Iterable[Union['Table', 'Paragraph', 'Block']]:
         """Yield all child elements (Paragraph, Table, or Block)."""
@@ -149,6 +150,21 @@ class Block(LayoutElement[Union['Table', 'Paragraph', 'Block']]):
     def type(cls) -> LayoutElementType:
         """Return the type enum for this element."""
         return LayoutElementType.BLOCK
+
+    @property
+    def start_page(self) -> int:
+        """Return the starting page number for this block."""
+        return self.page_span[0]
+
+    @property
+    def end_page(self) -> int:
+        """Return the ending page number for this block."""
+        return self.page_span[1]
+
+    @property
+    def number_of_pages(self) -> int:
+        """Return the number of pages spanned by this block."""
+        return self.page_span[1] - self.page_span[0] + 1 if self.page_span[0] >= 0 and self.page_span[1] >= 0 else 0
 
 
 @dataclass
@@ -321,3 +337,51 @@ class Table(LayoutElement[Row]):
     def type(cls) -> LayoutElementType:
         """Return the type enum for this element."""
         return LayoutElementType.TABLE
+
+
+
+@dataclass
+class OcrResultSummary:
+    """
+    Summary statistics for an OcrResult, for logging and reporting.
+    """
+    num_pages: int
+    num_blocks: int
+    num_tables: int
+    num_words: int
+    total_length: int
+
+    @classmethod
+    def from_ocr_result(cls, result: OcrResult) -> "OcrResultSummary":
+        """
+        Create a summary from an OcrResult, using both the number of Page layout elements and the page spans in blocks.
+        The number of pages is the maximum of the number of Page elements and the highest end_page in all blocks.
+        """
+        num_blocks = 0
+        num_tables = 0
+        num_words = 0
+        max_end_page = 0
+        total_length = len(result.document.text())
+        for page in result.document.pages:
+            for block in (page.blocks or []):
+                num_blocks += 1
+                if isinstance(block, Table):
+                    num_tables += 1
+                
+                if hasattr(block, 'page_span') and block.page_span[1] is not None:
+                    max_end_page = max(max_end_page, block.page_span[1])
+
+                for para in block.elements or []:
+                    for line in para.lines or []:
+                        for word in line.words or []:
+                            num_words += 1
+                            
+        num_layout_pages = len(result.document.pages)
+        num_pages = max(num_layout_pages, max_end_page)
+        return cls(
+            num_pages=num_pages,
+            num_blocks=num_blocks,
+            num_tables=num_tables,
+            num_words=num_words,
+            total_length=total_length,
+        )

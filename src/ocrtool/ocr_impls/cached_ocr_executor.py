@@ -42,9 +42,6 @@ class CachedOcrExecutor(ExternalOcrExecutor):
         self._cache_prefix = cache_prefix
         self._last_result = None
         
-        # Set page_limit to the decorated executor's limit if available
-        self.page_limit = getattr(decorated_executor, 'page_limit', None)
-        
     @property
     def type(self) -> OcrExecutorType:
         # Use the decorated executor's type if available

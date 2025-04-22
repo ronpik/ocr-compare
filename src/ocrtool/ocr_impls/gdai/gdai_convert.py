@@ -339,7 +339,8 @@ def convert_documentai_to_ocr(documentai_result: Dict[str, Any]) -> OcrResult:
                     elements=paragraphs,
                     blockType="TEXT",  # Default type, DocumentAI doesn't specify block types as clearly
                     confidence=block_confidence,
-                    block_no=block_idx
+                    block_no=block_idx,
+                    page_span=(page_number, page_number)
                 )
                 blocks.append(block)
 

@@ -153,13 +153,13 @@ def main():
             engine_name = "gdai-ocr"
         
         # Method 1: Using the factory pattern
-        print("\nMethod 1: Using factory pattern")
-        result1 = execute_ocr(document_data, engine=engine_name, engine_config=config_dict.to_dict())
+        # print("\nMethod 1: Using factory pattern")
+        # result1 = execute_ocr(document_data, engine=engine_name, engine_config=config_dict.to_dict())
         
-        # # Method 2: Creating executor instance directly
-        # print("\nMethod 2: Creating executor instance directly")
-        # gdai_executor = ExecutorClass(config=config_dict)
-        # result2 = gdai_executor.execute_ocr(document_data)
+        # Method 2: Creating executor instance directly
+        print("\nMethod 2: Creating executor instance directly")
+        gdai_executor = ExecutorClass(config=config_dict)
+        result1 = gdai_executor.execute_ocr(document_data)
         
         # Display results
         print("\nDocument Analysis Results:")

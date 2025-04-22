@@ -11,8 +11,6 @@ from ocrtool.ocr_impls.gdai import GdaiConfig
 from ocrtool.ocr_impls.ocr_executor import ExternalOcrExecutor
 from ocrtool.ocr_impls.gdai.gdai_convert import process_documentai_result
 from ocrtool.ocr_impls.gdai.gdai_layout_executor import process_layout_result
-from ocrtool.page_limit.page_count import is_pdf, count_pdf_pages, split_pdf_to_segments
-from ocrtool.page_limit.exceptions import PageLimitExceededError
 from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 
 class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
@@ -20,8 +18,6 @@ class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
     Base executor for Google Document AI processors (OCR, Layout, etc).
     Handles client setup, credentials, and request execution.
     """
-    page_limit: int | None = None  # Default: no limit, override in subclasses
-
     def __init__(self, config: Optional[GdaiConfig | dict[str, Any]] = None, handle_page_limit: bool = True) -> None:
         """
         Initialize the Google Document AI base executor.
@@ -74,7 +70,7 @@ class GoogleDocumentAIBaseExecutor(ExternalOcrExecutor):
             name=self.processor_name,
             raw_document=raw_document,
             skip_human_review=True,
-            process_options=process_options,
+            # process_options=process_options,
         )
         result = self.client.process_document(request=request, timeout=timeout)
         result_dict = MessageToDict(result._pb)
@@ -201,7 +197,7 @@ class GoogleDocumentAILayoutExecutor(GoogleDocumentAIBaseExecutor):
     """
     @property
     def type(self) -> OcrExecutorType:
-        return OcrExecutorType.DOCUMENT_AI_BATCH_LAYOUT_PARSER
+        return OcrExecutorType.DOCUMENT_AI_LAYOUT_PARSER
 
     def _get_process_options(self):
         return documentai.ProcessOptions(

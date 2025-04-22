@@ -125,12 +125,18 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
             for i, subblock in enumerate(block["blocks"]):
                 subblock_obj = parse_block(subblock, block_path / f"block_{i}", i)
                 elements.append(subblock_obj)
+        # Extract page_span from block if present
+        page_span_dict = block.get('pageSpan', {})
+        page_start = page_span_dict.get('pageStart', page_no)
+        page_end = page_span_dict.get('pageEnd', page_no)
+        page_span = (page_start, page_end)
         return Block(
             element_path=block_path,
             elements=elements,
             blockType=block_type,
             confidence=1.0,
-            block_no=block_idx
+            block_no=block_idx,
+            page_span=page_span
         )
 
     for block_idx, block in enumerate(blocks):

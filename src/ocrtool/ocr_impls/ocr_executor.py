@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, List
-from dataclasses import dataclass, replace, is_dataclass
+from typing import Any, Dict, List
+from dataclasses import replace, is_dataclass
 import time
 from pathlib import Path
 
@@ -10,47 +10,8 @@ from ocrtool.canonical_ocr.ocr_schema import OcrResult, Document
 from ocrtool.page_limit.page_limit_handler import PageLimitHandler
 from ocrtool.page_limit.limits import OcrExecutorType, get_page_limit
 from ocrtool.page_limit.page_count import is_pdf, count_pdf_pages, split_pdf_to_segments
+from ocrtool.canonical_ocr.ocr_schema import OcrResultSummary
 
-
-
-
-
-@dataclass
-class OcrResultSummary:
-    """
-    Summary statistics for an OcrResult, for logging and reporting.
-    """
-    num_pages: int
-    num_blocks: int
-    num_tables: int
-    num_symbols: int
-    num_characters: int
-
-    @classmethod
-    def from_ocr_result(cls, result: OcrResult) -> "OcrResultSummary":
-        num_pages = len(result.document.pages)
-        num_blocks = 0
-        num_tables = 0
-        num_symbols = 0
-        num_characters = 0
-        for page in result.document.pages:
-            for block in getattr(page, 'blocks', []):
-                num_blocks += 1
-                if getattr(block, 'blockType', None) == 'TABLE':
-                    num_tables += 1
-                for para in getattr(block, 'paragraphs', []):
-                    for line in getattr(para, 'lines', []):
-                        for word in getattr(line, 'words', []):
-                            for symbol in getattr(word, 'symbols', []):
-                                num_symbols += 1
-                                num_characters += len(getattr(symbol, 'text_value', '') or '')
-        return cls(
-            num_pages=num_pages,
-            num_blocks=num_blocks,
-            num_tables=num_tables,
-            num_symbols=num_symbols,
-            num_characters=num_characters,
-        )
 
 class OcrExecutor(ABC):
     """
@@ -190,8 +151,7 @@ class ExternalOcrExecutor(OcrExecutor):
                     LOG.info(
                         f"Segment {idx+1} processed in {seg_time:.2f}s: "
                         f"pages={seg_summary.num_pages}, blocks={seg_summary.num_blocks}, "
-                        f"tables={seg_summary.num_tables}, symbols={seg_summary.num_symbols}, "
-                        f"characters={seg_summary.num_characters}"
+                        f"tables={seg_summary.num_tables}, total_length={seg_summary.total_length}"
                     )
                     results.append(seg_result)
                 combined = self._combine_ocr_results(results)
@@ -199,8 +159,8 @@ class ExternalOcrExecutor(OcrExecutor):
                 summary = OcrResultSummary.from_ocr_result(combined)
                 LOG.info(
                     f"Combined result: pages={summary.num_pages}, blocks={summary.num_blocks}, "
-                    f"tables={summary.num_tables}, symbols={summary.num_symbols}, "
-                    f"characters={summary.num_characters}, total_time={total_time:.2f}s"
+                    f"tables={summary.num_tables}, total_length={summary.total_length}, "
+                    f"total_time={total_time:.2f}s"
                 )
                 return combined
         try:
@@ -212,8 +172,8 @@ class ExternalOcrExecutor(OcrExecutor):
             summary = OcrResultSummary.from_ocr_result(result)
             LOG.info(
                 f"OCR complete: pages={summary.num_pages}, blocks={summary.num_blocks}, "
-                f"tables={summary.num_tables}, symbols={summary.num_symbols}, "
-                f"characters={summary.num_characters}, elapsed={elapsed:.2f}s"
+                f"tables={summary.num_tables}, symbols={summary.total_length}, "
+                f"elapsed={elapsed:.2f}s"
             )
             return result
         except Exception as exc:
