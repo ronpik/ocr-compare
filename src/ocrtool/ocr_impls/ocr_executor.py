@@ -200,32 +200,141 @@ class ExternalOcrExecutor(OcrExecutor):
     @staticmethod
     def _renumber_and_repath_pages(pages: list) -> list:
         """
-        Renumber pages and update element_path for all layout elements recursively using dataclasses.replace.
+        Renumber pages and update element_path for all layout elements recursively.
+        Uses the page_span fields in Block elements to determine the proper page numbering.
+        Ensures continuous page numbering across combined documents.
         """
-        def update_element_path(element, new_page_no: int):
-            if not hasattr(element, 'element_path') or element.element_path is None:
-                return element
+        if not pages:
+            return []
             
+        # First pass: create a mapping from old page numbers to new page numbers
+        new_pages = []
+        current_page_number = 1
+        page_number_map = {}
+        
+        for page_idx, page in enumerate(pages):
+            old_page_no = page.page_no
+            page_number_map[old_page_no] = current_page_number
+            
+            # Update the page number
+            page = replace(page, page_no=current_page_number)
+            new_pages.append(page)
+            
+            # Find the maximum end_page in this page's blocks
+            max_end_page = current_page_number
+            for block in page.blocks:
+                if hasattr(block, 'page_span') and block.page_span != (-1, -1):
+                    start_page, end_page = block.page_span
+                    if end_page > 0:  # Only consider valid end pages
+                        max_end_page = max(max_end_page, end_page)
+            
+            # Next page will be numbered after the highest end_page in this page
+            current_page_number = max_end_page + 1
+        
+        # Second pass: update all element_paths and page_spans using the mapping
+        for page_idx, page in enumerate(new_pages):
+            new_page_no = page.page_no
+            updated_page = ExternalOcrExecutor._update_page_elements(page, new_page_no, page_number_map)
+            new_pages[page_idx] = updated_page
+            
+        return new_pages
+    
+    @staticmethod
+    def _update_page_elements(page, new_page_no, page_number_map):
+        """
+        Update all elements within a page, including element_paths and page_spans.
+        
+        Args:
+            page: The page to update
+            new_page_no: The new page number
+            page_number_map: Mapping from old page numbers to new page numbers
+        
+        Returns:
+            Updated page with all elements properly updated
+        """
+        # Update element_path for the page itself
+        if hasattr(page, 'element_path') and page.element_path is not None:
+            parts = list(page.element_path.parts)
+            if len(parts) > 1:
+                parts[1] = str(new_page_no)
+                new_path = Path(*parts)
+                page = replace(page, element_path=new_path)
+        
+        # Update blocks
+        updated_blocks = []
+        for block in page.blocks:
+            # Update page_span for the block
+            if hasattr(block, 'page_span') and block.page_span != (-1, -1):
+                old_start, old_end = block.page_span
+                # Map old page numbers to new page numbers, defaulting to the current page if not in the map
+                new_start = page_number_map.get(old_start, new_page_no)
+                new_end = page_number_map.get(old_end, new_page_no)
+                block = replace(block, page_span=(new_start, new_end))
+            
+            # Update element_path for the block
+            if hasattr(block, 'element_path') and block.element_path is not None:
+                parts = list(block.element_path.parts)
+                if len(parts) > 1:
+                    parts[1] = str(new_page_no)
+                    new_path = Path(*parts)
+                    block = replace(block, element_path=new_path)
+            
+            # Recursively update all child elements
+            updated_block = ExternalOcrExecutor._update_recursive(block, new_page_no, page_number_map)
+            updated_blocks.append(updated_block)
+        
+        # Replace the blocks list with the updated blocks
+        page = replace(page, blocks=updated_blocks)
+        return page
+    
+    @staticmethod
+    def _update_recursive(element, new_page_no, page_number_map):
+        """
+        Recursively update all nested elements within an element.
+        
+        Args:
+            element: The element to update
+            new_page_no: The new page number
+            page_number_map: Mapping from old page numbers to new page numbers
+        
+        Returns:
+            Updated element with all nested elements properly updated
+        """
+        if not is_dataclass(element):
+            return element
+            
+        # Update element_path if present
+        if hasattr(element, 'element_path') and element.element_path is not None:
             parts = list(element.element_path.parts)
             if len(parts) > 1:
                 parts[1] = str(new_page_no)
                 new_path = Path(*parts)
                 element = replace(element, element_path=new_path)
-            
-            # Recursively update children fields
-            for field_name, field_def in getattr(element, '__dataclass_fields__', {}).items():
-                value = getattr(element, field_name)
-                if isinstance(value, list):
-                    new_list = [update_element_path(child, new_page_no) for child in value]
-                    element = replace(element, **{field_name: new_list})
-                elif is_dataclass(value) and hasattr(value, 'element_path'):
-                    element = replace(element, **{field_name: update_element_path(value, new_page_no)})
-            
-            return element
         
-        new_pages = []
-        for new_page_no, page in enumerate(pages, 1):
-            page = replace(page, page_no=new_page_no)
-            page = update_element_path(page, new_page_no)
-            new_pages.append(page)
-        return new_pages
+        # Update page_span if present
+        if hasattr(element, 'page_span') and element.page_span != (-1, -1):
+            old_start, old_end = element.page_span
+            new_start = page_number_map.get(old_start, new_page_no)
+            new_end = page_number_map.get(old_end, new_page_no)
+            if (new_start, new_end) != element.page_span:
+                element = replace(element, page_span=(new_start, new_end))
+        
+        # Process all fields that might contain nested elements
+        for field_name, field_def in getattr(element, '__dataclass_fields__', {}).items():
+            value = getattr(element, field_name)
+            
+            if isinstance(value, list):
+                # Update all elements in a list
+                updated_list = []
+                for item in value:
+                    updated_item = ExternalOcrExecutor._update_recursive(item, new_page_no, page_number_map)
+                    updated_list.append(updated_item)
+                if value != updated_list:
+                    element = replace(element, **{field_name: updated_list})
+            elif is_dataclass(value):
+                # Update a single nested dataclass
+                updated_value = ExternalOcrExecutor._update_recursive(value, new_page_no, page_number_map)
+                if value != updated_value:
+                    element = replace(element, **{field_name: updated_value})
+        
+        return element
