@@ -177,20 +177,6 @@ class GoogleDocumentAIOcrExecutor(GoogleDocumentAIBaseExecutor):
             "description": "Google Cloud Document AI OCR engine"
         }
 
-    @staticmethod
-    def _combine_ocr_results(results: list[OcrResult]) -> OcrResult:
-        """
-        Combine multiple OcrResult objects by concatenating their pages.
-        """
-        if not results:
-            return OcrResult(document=Document(pages=[]))
-        base = results[0]
-        all_pages = []
-        for result in results:
-            all_pages.extend(result.document.pages)
-        base.document.pages = all_pages
-        return base
-
 class GoogleDocumentAILayoutExecutor(GoogleDocumentAIBaseExecutor):
     """
     Layout executor implementation using Google Document AI Layout processor.

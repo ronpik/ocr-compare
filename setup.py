@@ -53,7 +53,7 @@ if any('magic' in arg or 'all' in arg for arg in sys.argv):
 
 setup(
     name="ocr-compare",
-    version="0.2.1",
+    version="0.2.2",
     description="A tool for comparing OCR results from different OCR engines",
     author="OCR Compare Team",
     package_dir={"": "src"},
