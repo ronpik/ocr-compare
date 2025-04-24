@@ -64,11 +64,24 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
         block_type = block.get("textBlock", {}).get("type", "TEXT") if "textBlock" in block else (
             "TABLE" if "tableBlock" in block else "BLOCK"
         )
-        # Paragraph
+        
+        # Handle textBlock with nested blocks
         if "textBlock" in block:
-            text = block["textBlock"].get("text", "")
-            para = make_paragraph(text, block_path / "paragraph_0")
-            elements.append(para)
+            text_block = block["textBlock"]
+            text = text_block.get("text", "")
+            
+            # Create a paragraph for the direct text
+            if text:
+                para = make_paragraph(text, block_path / "paragraph_0")
+                elements.append(para)
+            
+            # Process nested blocks within textBlock if they exist
+            if "blocks" in text_block and isinstance(text_block["blocks"], list):
+                for i, nested_block in enumerate(text_block["blocks"]):
+                    nested_path = block_path / f"nested_{i}"
+                    nested_obj = parse_block(nested_block, nested_path, i)
+                    elements.append(nested_obj)
+        
         # Table
         if "tableBlock" in block:
             nonlocal table_count
@@ -120,16 +133,19 @@ def process_layout_result(layout_result: Dict[str, Any]) -> OcrResult:
                 table_no=table_count
             )
             elements.append(table_obj)
-        # Nested blocks (not defined in this schema, but if present, parse recursively)
+            
+        # Top-level nested blocks (not within textBlock or tableBlock)
         if "blocks" in block and not ("textBlock" in block or "tableBlock" in block):
             for i, subblock in enumerate(block["blocks"]):
                 subblock_obj = parse_block(subblock, block_path / f"block_{i}", i)
                 elements.append(subblock_obj)
+                
         # Extract page_span from block if present
         page_span_dict = block.get('pageSpan', {})
         page_start = page_span_dict.get('pageStart', page_no)
         page_end = page_span_dict.get('pageEnd', page_no)
         page_span = (page_start, page_end)
+        
         return Block(
             element_path=block_path,
             elements=elements,
