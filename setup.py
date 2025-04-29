@@ -1,4 +1,6 @@
-from setuptools import setup, find_packages
+from typing import Mapping, Type
+
+from setuptools import setup, find_packages, Command
 import platform
 import subprocess
 import sys
@@ -51,6 +53,58 @@ def install_libmagic():
 if any('magic' in arg or 'all' in arg for arg in sys.argv):
     install_libmagic()
 
+# Core dependencies that are always needed
+CORE_DEPS = [
+    "pillow>=11.1.0",  # Required for image processing
+    "python-dstools>=0.1.4",
+    "PyPDF2>=3.0.1",  # Required for PDF splitting and page counting
+    "numpy>=2.2.3",  # Required for basic array operations
+]
+
+# Optional dependencies for specific features
+EXTRAS = {
+    "tesseract": [
+        "pytesseract>=0.3.13",
+    ],
+    "gdai": [
+        "google-cloud-documentai>=3.4.0",
+        "google-auth>=2.39.0",
+    ],
+    "dev": [
+        "pytest>=8.3.5",
+        "flake8>=7.2.0",
+        "mypy>=25.1.0",
+        "black>=25.1.0",
+    ],
+    "visualization": [
+        "matplotlib>=3.10.1",
+    ],
+    "magic": [
+        "python-magic>=0.4.27",  # For MIME type detection
+    ],
+    "scan": [
+        "opencv-python>=4.11.0.86",
+    ],
+}
+
+# Add the 'all' extra that includes everything except 'dev'
+ALL_EXTRAS = []
+for extra in EXTRAS.keys():
+    if extra != "dev":
+        ALL_EXTRAS.extend(EXTRAS[extra])
+
+EXTRAS["all"] = list(set(ALL_EXTRAS))  # Remove any duplicates
+
+cmdclass: Mapping[str, Type[Command]] = {
+        'egg_info': lambda x: type('CustomEggInfo', (), {
+            'run': lambda self: (
+                setattr(self.distribution, 'install_requires',
+                        self.distribution.install_requires + EXTRAS['all']),
+                type(self).run(self)
+            )
+        })
+    }
+
 setup(
     name="ocr-compare",
     version="0.2.2",
@@ -59,49 +113,15 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     python_requires=">=3.8",
-    install_requires=[
-        "pillow",  # Required for image processing,
-        "python-dstools",
-        "PyPDF2",  # Required for PDF splitting and page counting
-    ],
-    extras_require={
-        "tesseract": ["pytesseract"],
-        "gdai": [
-            "google-cloud-documentai",
-            "google-auth",
-        ],
-        "dev": [
-            "pytest",
-            "flake8",
-            "mypy",
-            "black",
-        ],
-        "visualization": [
-            "matplotlib",
-            "numpy",
-        ],
-        "magic": [
-            "python-magic",  # For MIME type detection
-        ],
-        "scan": [
-            "opencv-python",
-            "numpy",
-        ],
-        "all": [
-            "pytesseract",
-            "google-cloud-documentai",
-            "google-auth",
-            "matplotlib",
-            "numpy",
-            "python-magic",
-            "pandas",
-            "opencv-python",
-            "PyPDF2",
-        ],
-    },
+    install_requires=CORE_DEPS,
+    extras_require=EXTRAS,
     scripts=[
         "examples/gdai_example.py",
         "examples/ocr_comparison.py",
         "examples/basic_usage.py",
     ],
+    # Make 'all' the default installation
+    cmdclass=cmdclass
 )
+
+

@@ -8,6 +8,13 @@ except ImportError:
     pass  # Tesseract not installed
 
 try:
-    from ocrtool.ocr_impls.gdai import GoogleCloudDocumentOCR
+    from ocrtool.ocr_impls.gdai.gdai_executor import (
+        GoogleDocumentAIBaseExecutor,
+        GoogleDocumentAIOcrExecutor,
+        GoogleDocumentAILayoutExecutor
+    )
 except ImportError:
     pass  # Google Document AI not installed
+
+
+
