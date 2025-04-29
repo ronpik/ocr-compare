@@ -1,6 +1,7 @@
 from typing import Mapping, Type
 
 from setuptools import setup, find_packages, Command
+from setuptools.command.egg_info import egg_info
 import platform
 import subprocess
 import sys
@@ -69,6 +70,7 @@ EXTRAS = {
     "gdai": [
         "google-cloud-documentai>=3.4.0",
         "google-auth>=2.39.0",
+        "numpy~=1.26.4"
     ],
     "dev": [
         "pytest>=8.3.5",
@@ -95,15 +97,18 @@ for extra in EXTRAS.keys():
 
 EXTRAS["all"] = list(set(ALL_EXTRAS))  # Remove any duplicates
 
-cmdclass: Mapping[str, Type[Command]] = {
-        'egg_info': lambda x: type('CustomEggInfo', (), {
-            'run': lambda self: (
-                setattr(self.distribution, 'install_requires',
-                        self.distribution.install_requires + EXTRAS['all']),
-                type(self).run(self)
-            )
-        })
-    }
+
+class CustomEggInfo(egg_info):
+    """Custom egg_info command that adds 'all' extras to install_requires."""
+    
+    def run(self):
+        """Run the command, adding 'all' extras to install_requires."""
+        if self.distribution.install_requires:
+            self.distribution.install_requires.extend(EXTRAS['all'])
+        else:
+            self.distribution.install_requires = EXTRAS['all']
+        super().run()
+
 
 setup(
     name="ocr-compare",
@@ -121,7 +126,9 @@ setup(
         "examples/basic_usage.py",
     ],
     # Make 'all' the default installation
-    cmdclass=cmdclass
+    cmdclass={
+        'egg_info': CustomEggInfo,
+    }
 )
 
 
