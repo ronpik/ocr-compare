@@ -335,3 +335,4 @@ class TesseractOcrExecutor(ExternalOcrExecutor):
         )
         
         return OcrResult(document=document)
+    

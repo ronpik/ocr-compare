@@ -1,11 +1,10 @@
 from typing import Mapping, Type
 
-from setuptools import setup, find_packages, Command
+from setuptools import setup, find_packages
 from setuptools.command.egg_info import egg_info
 import platform
 import subprocess
 import sys
-import os
 
 
 def install_libmagic():

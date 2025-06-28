@@ -1,2 +1,2 @@
-from .page_limit_handler import PageLimitHandler
-from .exceptions import PageLimitExceededError 
+from ocrtool.page_limit.page_limit_handler import PageLimitHandler
+from ocrtool.page_limit.exceptions import PageLimitExceededError
