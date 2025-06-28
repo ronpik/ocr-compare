@@ -2,7 +2,7 @@
 OCR Compare - A tool for comparing OCR results from different OCR engines
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.3"
 
 from ocrtool.canonical_ocr.ocr_schema import OcrResult
 from ocrtool.ocr import (
