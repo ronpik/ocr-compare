@@ -58,7 +58,7 @@ CORE_DEPS = [
     "pillow>=11.1.0",  # Required for image processing
     "python-dstools>=0.1.4",
     "PyPDF2>=3.0.1",  # Required for PDF splitting and page counting
-    "numpy>=2.2.3",  # Required for basic array operations
+    "numpy>=1.26.4",  # Required for basic array operations
 ]
 
 # Optional dependencies for specific features

@@ -1,3 +1,64 @@
 [build-system]
 requires = ["setuptools>=64.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocr-compare"
+version = "0.2.2"
+description = "A tool for comparing OCR results from different OCR engines"
+authors = [
+    {name = "OCR Compare Team"},
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pillow>=11.1.0",
+    "python-dstools>=0.1.4",
+    "PyPDF2>=3.0.1",
+    "numpy>=1.26.4",
+    "torch==2.2.2",
+    "torchvision==0.17.2",
+    "docling>=2.39.0",
+    "typer>=0.12.3",
+]
+
+[project.optional-dependencies]
+tesseract = [
+    "pytesseract>=0.3.13",
+]
+gdai = [
+    "google-cloud-documentai>=3.4.0",
+    "google-auth>=2.39.0",
+    "numpy~=1.26.4"
+]
+dev = [
+    "pytest",
+    "flake8",
+    "mypy",
+    "black",
+    "docling",
+    "torch==2.2.2",
+    "torchvision==0.17.2",
+]
+visualization = [
+    "matplotlib>=3.10.1",
+]
+magic = [
+    "python-magic>=0.4.27",
+]
+scan = [
+    "opencv-python>=4.11.0.86",
+]
+all = [
+    "pytesseract>=0.3.13",
+    "google-cloud-documentai>=3.4.0",
+    "google-auth>=2.39.0",
+    "numpy~=1.26.4",
+    "matplotlib>=3.10.1",
+    "python-magic>=0.4.27",
+    "opencv-python>=4.11.0.86",
+]
+
+[project.scripts]
+gdai_example = "examples.gdai_example:main"
+ocr_comparison = "examples.ocr_comparison:main"
+basic_usage = "examples.basic_usage:main"
