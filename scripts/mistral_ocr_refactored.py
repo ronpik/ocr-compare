@@ -24,7 +24,7 @@ Usage Examples:
     # Extract Table of Contents
     python mistral_ocr_refactored.py --file document.pdf --extract-toc --toc-output toc.json
     
-    # Extract and refine Table of Contents using AI reasoning and code generation
+    # Extract and refine Table of Contents using AI vision and code generation
     python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc --original-image document_page1.png
 """
 
@@ -253,17 +253,17 @@ def refine_toc_step1_reasoning(
     toc_file: str,
     image_file: str,
     api_key: str,
-    reasoning_model: str = "magistral-small-2506"
+    reasoning_model: str = "pixtral-12b-latest"
 ) -> str:
     """
-    Step 1: Use Mistral's reasoning model to analyze OCR output and generate fix instructions.
+    Step 1: Use Mistral's vision model to analyze OCR output and generate fix instructions.
     
     Args:
         markdown_file: Path to the markdown file with OCR content
         toc_file: Path to the ToC JSON file
         image_file: Path to the original image file
         api_key: Mistral API key
-        reasoning_model: Reasoning model to use
+        reasoning_model: Vision model to use for analysis
         
     Returns:
         String containing explicit fix instructions
@@ -655,9 +655,9 @@ def main(
         str,
         typer.Option(
             "--reasoning-model",
-            help="Reasoning model for ToC analysis (Step 1)"
+            help="Vision model for ToC analysis (Step 1)"
         ),
-    ] = "magistral-small-2506",
+    ] = "pixtral-12b-latest",
     codegen_model: Annotated[
         str,
         typer.Option(
@@ -808,8 +808,8 @@ def main(
             md_output_file = markdown_file if markdown_file else "output.md"
             
             try:
-                # Step 1: Reasoning analysis
-                print("Step 1: Analyzing ToC with reasoning model...")
+                # Step 1: Vision analysis
+                print("Step 1: Analyzing ToC with vision model...")
                 instructions = refine_toc_step1_reasoning(
                     markdown_file=md_output_file,
                     toc_file=toc_output,
