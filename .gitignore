@@ -105,3 +105,9 @@ dmypy.json
 .pyre/
 
 uv.lock
+math-books/
+examples/
+toc.json
+toc-fixed.json
+results/
+volumes/

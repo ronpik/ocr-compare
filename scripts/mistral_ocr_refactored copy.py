@@ -24,18 +24,16 @@ Usage Examples:
     # Extract Table of Contents
     python mistral_ocr_refactored.py --file document.pdf --extract-toc --toc-output toc.json
     
-    # Extract and refine Table of Contents using AI (works with both PDF and images)
-    python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc
+    # Extract and refine Table of Contents using AI vision and code generation
+    python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc --original-image document_page1.png
     
     # Refine ToC with intermediate outputs saved
-    python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc --intermediate-output
+    python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc \
+        --original-image document_page1.png --intermediate-output
         
     # Refine ToC with custom output folder
     python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc \
-        --intermediate-output --output-folder ./results
-        
-    # Works with images too - will use vision model
-    python mistral_ocr_refactored.py --file toc-page.jpg --extract-toc --refine-toc
+        --original-image document_page1.png --intermediate-output --output-folder ./results
 """
 
 import os
@@ -70,23 +68,27 @@ class TocEntry(BaseModel):
 
     id: int = Field(
         ...,
-        description="The unique identifier for the entry, the index number of the entry in the Table of Contents"
+        description="The unique identifier for the entry, i.e. its index in the ToC"
     )
     type: str = Field(
-        ..., 
-        description="Type of entry: 'section' for main sections or 'subsection' for sub-sections"
+        ...,
+        description="Entry type: 'section' for top-level, 'subsection' for nested"
     )
     text: str = Field(
-        ..., 
-        description="The name/title of the section as it appears in the Table of Contents"
+        ...,
+        description="The title of the section, exactly as shown in the ToC"
     )
     parent: Optional[int] = Field(
-        None, 
-        description="For subsections, the id of the parent section it belongs to. For sections, this should be null"
+        None,
+        description="If a subsection: the id of its parent section; otherwise null"
     )
-    page_number: Optional[int] = Field(
-        None, 
-        description="The page number where this section starts, if available in the ToC"
+    toc_page_number: Optional[int] = Field(
+        None,
+        description="The page number where this entry is listed in the Table of Contents"
+    )
+    start_page_number: Optional[int] = Field(
+        None,
+        description="The page number where this section actually begins in the document"
     )
 
 
@@ -362,102 +364,6 @@ Generate explicit fix instructions in this exact format:
             
     except Exception as e:
         raise ValueError(f"Error calling reasoning model: {e}")
-
-
-def refine_toc_step1_reasoning_pdf(
-    markdown_file: str,
-    toc_file: str,
-    pdf_file: str,
-    api_key: str,
-    reasoning_model: str = "mistral-medium-2505"
-) -> str:
-    """
-    Step 1: Use Mistral's text analysis to analyze markdown content and generate fix instructions.
-    
-    Args:
-        markdown_file: Path to the markdown file with OCR content
-        toc_file: Path to the ToC JSON file
-        pdf_file: Path to the PDF file (not directly used, but kept for consistency)
-        api_key: Mistral API key
-        reasoning_model: Model to use for analysis
-        
-    Returns:
-        String containing explicit fix instructions
-    """
-    # Read input files
-    try:
-        with open(markdown_file, 'r', encoding='utf-8') as f:
-            markdown_content = f.read()
-        
-        with open(toc_file, 'r', encoding='utf-8') as f:
-            toc_data = json.load(f)
-        
-        # Note: We don't encode the PDF since we're using text-only analysis
-        # The full markdown content already contains the document text
-        
-    except FileNotFoundError as e:
-        raise ValueError(f"Required file not found: {e}")
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in ToC file: {e}")
-    
-    # Create the reasoning prompt that focuses on text analysis
-    prompt = f"""You are an expert document analyst. Your task is to analyze the extracted markdown content and Table of Contents (ToC) data, then generate explicit fix instructions for improving the ToC accuracy.
-
-**INPUTS:**
-1. Extracted ToC JSON: {json.dumps(toc_data, indent=2)}
-2. Full extracted markdown content from all pages: {markdown_content[:4000]}...
-
-**YOUR TASK:**
-Analyze the markdown content and compare it with the extracted ToC JSON. Look for:
-- Incorrect page numbers (cross-reference with page markers in markdown)
-- Misspelled or incorrect section names
-- Wrong section hierarchy (parent-child relationships)
-- Missing or extra entries that appear in the markdown but not in ToC
-- Incorrect entry types (section vs subsection)
-
-**OUTPUT FORMAT:**
-Generate explicit fix instructions in this exact format:
-- modify the page number of toc entry with id X to Y
-- change the text field of toc entry with id X to "correct text"
-- change the parent field of toc entry with id X to Y (or null for top-level sections)
-- change the type field of toc entry with id X to "section" (or "subsection")
-- remove toc entry with id X
-- add new toc entry: type="section", text="New Section", parent=null, page_number=10
-
-**IMPORTANT:**
-- Reference entries by their id field from the JSON
-- Be precise with page numbers, text, and parent relationships
-- Look for section headers in the markdown content to identify missing ToC entries
-- Only suggest changes that you can clearly identify from the content
-- If no changes are needed, respond with "No changes needed"
-"""
-
-    # Initialize Mistral client
-    client = Mistral(api_key=api_key)
-    
-    try:
-        # Use text-only chat completion for content analysis
-        response = client.chat.complete(
-            model=reasoning_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0.1,  # Low temperature for more consistent analysis
-            max_tokens=2000
-        )
-        
-        # Extract the instructions from the response
-        if hasattr(response, 'choices') and response.choices:
-            instructions = response.choices[0].message.content
-            return instructions.strip()
-        else:
-            raise ValueError("No response from model")
-            
-    except Exception as e:
-        raise ValueError(f"Error calling model: {e}")
 
 
 def refine_toc_step2_codegen(
@@ -762,7 +668,7 @@ def main(
         str,
         typer.Option(
             "--reasoning-model",
-            help="Model for ToC analysis (Step 1). For PDFs, mistral-medium-2505 is used by default"
+            help="Vision model for ToC analysis (Step 1)"
         ),
     ] = "pixtral-12b-latest",
     codegen_model: Annotated[
@@ -793,6 +699,13 @@ def main(
             help="Folder path to store all output files (default: current directory)"
         ),
     ] = None,
+    original_image: Annotated[
+        Optional[str],
+        typer.Option(
+            "--original-image",
+            help="Path to original image file for ToC refinement (required with --refine-toc)"
+        ),
+    ] = None,
 ) -> None:
     """Main function to run the Mistral OCR with optional ToC extraction and refinement."""
     if not document_url and not file_path:
@@ -816,8 +729,8 @@ def main(
         print("Error: --refine-toc requires --extract-toc to be enabled.")
         raise typer.Exit(code=1)
     
-    if refine_toc and not file_path:
-        print("Error: --refine-toc requires --file to be specified (not supported with --url).")
+    if refine_toc and not original_image:
+        print("Error: --refine-toc requires --original-image to be specified.")
         raise typer.Exit(code=1)
     
     # Setup output folder
@@ -937,27 +850,15 @@ def main(
             md_output_file = markdown_file if markdown_file else "output.md"
             
             try:
-                # Step 1: Analysis based on file type
-                if file_path.lower().endswith('.pdf'):
-                    print("Step 1: Analyzing ToC with PDF document...")
-                    # Use mistral-medium-2505 for PDFs unless user specified a different model
-                    pdf_model = "mistral-medium-2505" if reasoning_model == "pixtral-12b-latest" else reasoning_model
-                    instructions = refine_toc_step1_reasoning_pdf(
-                        markdown_file=md_output_file,
-                        toc_file=toc_output,
-                        pdf_file=file_path,
-                        api_key=final_api_key,
-                        reasoning_model=pdf_model
-                    )
-                else:
-                    print("Step 1: Analyzing ToC with vision model...")
-                    instructions = refine_toc_step1_reasoning(
-                        markdown_file=md_output_file,
-                        toc_file=toc_output,
-                        image_file=file_path,
-                        api_key=final_api_key,
-                        reasoning_model=reasoning_model
-                    )
+                # Step 1: Vision analysis
+                print("Step 1: Analyzing ToC with vision model...")
+                instructions = refine_toc_step1_reasoning(
+                    markdown_file=md_output_file,
+                    toc_file=toc_output,
+                    image_file=original_image,
+                    api_key=final_api_key,
+                    reasoning_model=reasoning_model
+                )
                 print(f"Generated instructions: {instructions[:200]}...")
                 
                 # Save instructions to file if intermediate output is requested

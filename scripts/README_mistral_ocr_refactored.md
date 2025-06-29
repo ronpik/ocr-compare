@@ -67,6 +67,23 @@ python mistral_ocr_refactored.py --file document.pdf \
     --pages "0,1,2,3,4"
 ```
 
+### Table of Contents Refinement
+
+```bash
+# Extract and refine ToC using AI analysis (PDF uses mistral-medium-2505)
+python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc
+
+# Refine ToC with intermediate outputs saved
+python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc --intermediate-output
+
+# Refine ToC with custom output folder
+python mistral_ocr_refactored.py --file document.pdf --extract-toc --refine-toc \
+    --intermediate-output --output-folder ./results
+
+# Works with images too (uses vision model)
+python mistral_ocr_refactored.py --file toc-page.jpg --extract-toc --refine-toc
+```
+
 ### Full Example with All Options
 
 ```bash
@@ -81,6 +98,22 @@ python mistral_ocr_refactored.py \
     --include-images \
     --model mistral-ocr-latest
 ```
+
+## Table of Contents Refinement Process
+
+The refinement process uses a three-step AI workflow to improve ToC extraction accuracy:
+
+1. **Analysis Step**: 
+   - For PDFs: Uses `mistral-medium-2505` to analyze the extracted markdown content
+   - For images: Uses vision models like `pixtral-12b-latest` to analyze the visual content
+   - Compares the extracted ToC with the markdown content to identify inconsistencies
+   - Generates explicit fix instructions
+
+2. **Code Generation**: Uses Codestral to create a Python script that applies the fixes
+
+3. **Execution**: Runs the generated script to produce the refined ToC
+
+The refinement automatically detects whether you're working with a PDF or image and uses the appropriate model and approach.
 
 ## Table of Contents Structure
 
