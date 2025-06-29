@@ -19,6 +19,10 @@ dependencies = [
     "torchvision==0.17.2",
     "docling>=2.39.0",
     "typer>=0.12.3",
+    "mistralai>=0.7.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.24.0",
+    "langgraph>=0.0.69",
 ]
 
 [project.optional-dependencies]
@@ -62,3 +66,4 @@ all = [
 gdai_example = "examples.gdai_example:main"
 ocr_comparison = "examples.ocr_comparison:main"
 basic_usage = "examples.basic_usage:main"
+images-to-category-pdfs = "scripts.images_to_category_pdfs:main"

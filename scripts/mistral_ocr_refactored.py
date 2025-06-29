@@ -70,23 +70,27 @@ class TocEntry(BaseModel):
 
     id: int = Field(
         ...,
-        description="The unique identifier for the entry, the index number of the entry in the Table of Contents"
+        description="The unique identifier for the entry, i.e. its index in the ToC"
     )
     type: str = Field(
-        ..., 
-        description="Type of entry: 'section' for main sections or 'subsection' for sub-sections"
+        ...,
+        description="Entry type: 'section' for top-level, 'subsection' for nested"
     )
     text: str = Field(
-        ..., 
-        description="The name/title of the section as it appears in the Table of Contents"
+        ...,
+        description="The title of the section, exactly as shown in the ToC"
     )
     parent: Optional[int] = Field(
-        None, 
-        description="For subsections, the id of the parent section it belongs to. For sections, this should be null"
+        None,
+        description="If a subsection: the id of its parent section; otherwise null"
     )
-    page_number: Optional[int] = Field(
-        None, 
-        description="The page number where this section starts, if available in the ToC"
+    start_page_number: Optional[int] = Field(
+        None,
+        description="The page number associated with this entry - where this section actually begins in the document"
+    )
+    toc_page_number: Optional[int] = Field(
+        None,
+        description="The page number where this entry is listed in the Table of Contents, from the toc pages only"
     )
 
 
@@ -305,7 +309,8 @@ def refine_toc_step1_reasoning(
 
 **YOUR TASK:**
 Compare the visual Table of Contents in the original image with the extracted ToC JSON. Look for:
-- Incorrect page numbers
+- Incorrect start page numbers (where sections actually begin)
+- Incorrect ToC page numbers (where entries are listed in the ToC)
 - Misspelled or incorrect section names
 - Wrong section hierarchy (parent-child relationships)
 - Missing or extra entries
@@ -313,16 +318,17 @@ Compare the visual Table of Contents in the original image with the extracted To
 
 **OUTPUT FORMAT:**
 Generate explicit fix instructions in this exact format:
-- modify the page number of toc entry with id X to Y
+- modify the start_page_number of toc entry with id X to Y
+- modify the toc_page_number of toc entry with id X to Y
 - change the text field of toc entry with id X to "correct text"
 - change the parent field of toc entry with id X to Y (or null for top-level sections)
 - change the type field of toc entry with id X to "section" (or "subsection")
 - remove toc entry with id X
-- add new toc entry: type="section", text="New Section", parent=null, page_number=10
+- add new toc entry: type="section", text="New Section", parent=null, start_page_number=10, toc_page_number=2
 
 **IMPORTANT:**
 - Reference entries by their id field from the JSON
-- Be precise with page numbers, text, and parent relationships
+- Be precise with start_page_number (where section begins) and toc_page_number (where listed in ToC only)
 - Only suggest changes that you can clearly see are needed
 - If no changes are needed, respond with "No changes needed"
 """
@@ -409,7 +415,8 @@ def refine_toc_step1_reasoning_pdf(
 
 **YOUR TASK:**
 Analyze the markdown content and compare it with the extracted ToC JSON. Look for:
-- Incorrect page numbers (cross-reference with page markers in markdown)
+- Incorrect start page numbers (cross-reference with page markers in markdown)
+- Incorrect ToC page numbers (where entries are listed in the ToC section)
 - Misspelled or incorrect section names
 - Wrong section hierarchy (parent-child relationships)
 - Missing or extra entries that appear in the markdown but not in ToC
@@ -417,16 +424,17 @@ Analyze the markdown content and compare it with the extracted ToC JSON. Look fo
 
 **OUTPUT FORMAT:**
 Generate explicit fix instructions in this exact format:
-- modify the page number of toc entry with id X to Y
+- modify the start_page_number of toc entry with id X to Y
+- modify the toc_page_number of toc entry with id X to Y
 - change the text field of toc entry with id X to "correct text"
 - change the parent field of toc entry with id X to Y (or null for top-level sections)
 - change the type field of toc entry with id X to "section" (or "subsection")
 - remove toc entry with id X
-- add new toc entry: type="section", text="New Section", parent=null, page_number=10
+- add new toc entry: type="section", text="New Section", parent=null, start_page_number=10, toc_page_number=2
 
 **IMPORTANT:**
 - Reference entries by their id field from the JSON
-- Be precise with page numbers, text, and parent relationships
+- Be precise with start_page_number (where section begins) and toc_page_number (where listed in ToC)
 - Look for section headers in the markdown content to identify missing ToC entries
 - Only suggest changes that you can clearly identify from the content
 - If no changes are needed, respond with "No changes needed"
@@ -506,7 +514,7 @@ if __name__ == "__main__":
 1. Create a function called `apply_fixes(toc_data)` that takes a dictionary and returns the modified dictionary
 2. The function should apply all the fix instructions to the toc_data
 3. The toc_data has this structure: {{"entries": [list of toc entries]}}
-4. Each entry has fields: id, type, text, parent, page_number
+4. Each entry has fields: id, type, text, parent, toc_page_number, start_page_number
 5. Use hard-coded values based on the instructions
 6. Include a main section that reads input file, applies fixes, and writes output file
 
@@ -520,7 +528,8 @@ def apply_fixes(toc_data):
     # Apply fixes based on instructions
     for entry in entries:
         if entry.get("id") == 1:
-            entry["page_number"] = 5
+            entry["start_page_number"] = 5
+            entry["toc_page_number"] = 2
         elif entry.get("id") == 2:
             entry["text"] = "Corrected Title"
     
@@ -528,7 +537,7 @@ def apply_fixes(toc_data):
     entries = [e for e in entries if e.get("id") not in [3, 4]]
     
     # Add new entries if needed
-    new_entry = {{"id": 99, "type": "section", "text": "New Section", "parent": None, "page_number": 10}}
+    new_entry = {{"id": 99, "type": "section", "text": "New Section", "parent": None, "start_page_number": 10, "toc_page_number": 2}}
     entries.append(new_entry)
     
     return {{"entries": entries}}
@@ -658,7 +667,8 @@ def save_toc_as_markdown(toc_entries: List[Dict[str, Any]], output_file: str) ->
     for entry in toc_entries:
         entry_type = entry.get("type", "section")
         text = entry.get("text", "")
-        page = entry.get("page_number")
+        start_page = entry.get("start_page_number")
+        toc_page = entry.get("toc_page_number")
         
         # Format based on type
         if entry_type == "section":
@@ -666,9 +676,15 @@ def save_toc_as_markdown(toc_entries: List[Dict[str, Any]], output_file: str) ->
         else:  # subsection
             line = f"   - {text}"
             
-        # Add page number if available
-        if page is not None:
-            line += f" (p. {page})"
+        # Add page numbers if available
+        page_info = []
+        if start_page is not None:
+            page_info.append(f"starts p. {start_page}")
+        if toc_page is not None:
+            page_info.append(f"ToC p. {toc_page}")
+        
+        if page_info:
+            line += f" ({', '.join(page_info)})"
             
         markdown_lines.append(line + "\n")
     
@@ -701,7 +717,7 @@ def main(
             "--markdown",
             help="Path to save the extracted markdown content. Default: output.md"
         ),
-    ] = None,
+    ] = 'output.md',
     extract_toc: Annotated[
         bool,
         typer.Option(
@@ -792,7 +808,7 @@ def main(
             "--output-folder",
             help="Folder path to store all output files (default: current directory)"
         ),
-    ] = None,
+    ] = '.',
 ) -> None:
     """Main function to run the Mistral OCR with optional ToC extraction and refinement."""
     if not document_url and not file_path:
