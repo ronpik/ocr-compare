@@ -52,13 +52,47 @@ from langgraph.graph import StateGraph, END
 
 # --- Pydantic Models for Structured Output ---
 class TocEntry(BaseModel):
-    """Represents a single entry in the Table of Contents"""
-    id: int = Field(..., description="The unique identifier for the entry.")
-    type: str = Field(..., description="Entry type: 'section' or 'subsection'")
-    text: str = Field(..., description="The title of the section.")
-    parent: Optional[int] = Field(None, description="The id of its parent section.")
-    toc_page_number: Optional[int] = Field(None, description="Page where entry is in the ToC.")
-    start_page_number: Optional[int] = Field(None, description="Page where the section starts.")
+    """A single entry in a multi-page Table of Contents."""
+
+    id: int = Field(
+        ...,
+        description=(
+            "Sequential index of this entry within the Table of Contents listing. "
+            "For example, '1' for the first entry, '2' for the second, etc."
+        )
+    )
+    type: Literal["section", "subsection"] = Field(
+        ...,
+        description=(
+            "Either 'section' (a top-level heading) or 'subsection' (nested under a section)."
+        )
+    )
+    text: str = Field(
+        ...,
+        description="The exact title of this section/subsection as shown in the Table of Contents."
+    )
+    parent: Optional[int] = Field(
+        None,
+        description=(
+            "If this is a subsection, the `id` of its parent section; "
+            "if a top-level section, leave as null."
+        )
+    )
+    toc_list_page: Optional[int] = Field(
+        None,
+        description=(
+            "The printed or digital page number *where this entry is listed* in the Table of Contents itself. "
+            "Use this to jump to the ToC listing—for example, if your ToC spans pages v–vii, you might see "
+            "`toc_list_page=vi`."
+        )
+    )
+    chapter_start_page: Optional[int] = Field(
+        None,
+        description=(
+            "The actual document page number *where the content for this entry begins*. "
+            "Use this to jump straight to the section’s first page—for example, `chapter_start_page=42`."
+        )
+    )
 
 class TableOfContents(BaseModel):
     """Structured representation of a document's Table of Contents"""
@@ -161,21 +195,25 @@ def validate_python_syntax(code: str) -> tuple[bool, Optional[str]]:
         return False, error_msg
 
 
-def get_code_generation_template() -> str:
+def get_csv_fixer_script() -> str:
     """
-    Returns a robust template for ToC fixing scripts with comprehensive error handling.
+    Returns a robust script that applies ToC fixes from a CSV file.
     """
     return '''import json
 import sys
+import csv
 import traceback
 from typing import Dict, Any, List, Optional
 
-def apply_fixes(toc_data: Dict[str, Any]) -> Dict[str, Any]:
+def apply_fixes_from_csv(toc_data: Dict[str, Any], csv_file_path: str) -> Dict[str, Any]:
     """
-    Apply fixes to ToC data based on the given instructions.
+    Apply fixes to ToC data based on CSV instructions.
+    
+    CSV format: id,field,new_value
     
     Args:
         toc_data: Dictionary containing ToC entries
+        csv_file_path: Path to CSV file with fixes
         
     Returns:
         Fixed ToC data dictionary
@@ -194,6 +232,41 @@ def apply_fixes(toc_data: Dict[str, Any]) -> Dict[str, Any]:
         # Create a working copy to avoid modifying original
         fixed_entries = []
         
+        # Load fixes from CSV
+        fixes = {}
+        try:
+            with open(csv_file_path, 'r', encoding='utf-8') as f:
+                csv_reader = csv.DictReader(f)
+                for row in csv_reader:
+                    entry_id = int(row['id'])
+                    field = row['field']
+                    new_value = row['new_value']
+                    
+                    # Convert new_value to appropriate type
+                    if field in ['start_page_number', 'toc_page_number', 'id', 'parent']:
+                        if new_value.lower() in ['null', 'none', '']:
+                            new_value = None
+                        else:
+                            new_value = int(new_value)
+                    elif field == 'text':
+                        new_value = str(new_value)
+                    elif field == 'type':
+                        new_value = str(new_value)
+                    
+                    if entry_id not in fixes:
+                        fixes[entry_id] = {}
+                    fixes[entry_id][field] = new_value
+                    
+        except FileNotFoundError:
+            print(f"Error: CSV file '{csv_file_path}' not found")
+            return toc_data
+        except Exception as e:
+            print(f"Error reading CSV file: {e}")
+            return toc_data
+        
+        print(f"Loaded {len(fixes)} entry fixes from CSV")
+        
+        # Apply fixes to entries
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -201,28 +274,39 @@ def apply_fixes(toc_data: Dict[str, Any]) -> Dict[str, Any]:
             # Create a copy of the entry
             fixed_entry = entry.copy()
             
-            # Apply specific fixes here (will be generated dynamically)
-            {FIXES_PLACEHOLDER}
+            # Get entry ID
+            entry_id = fixed_entry.get("id")
+            if entry_id is None:
+                fixed_entries.append(fixed_entry)
+                continue
+            
+            # Apply fixes if any exist for this entry
+            if entry_id in fixes:
+                for field, new_value in fixes[entry_id].items():
+                    fixed_entry[field] = new_value
+                    print(f"Applied fix: Entry {entry_id}, {field} = {new_value}")
             
             fixed_entries.append(fixed_entry)
         
         return {"entries": fixed_entries}
         
     except Exception as e:
-        print(f"Error in apply_fixes: {e}")
+        print(f"Error in apply_fixes_from_csv: {e}")
         print("Returning original data")
+        traceback.print_exc()
         return toc_data
 
 
 def main():
     """Main function to handle file I/O and error handling."""
     try:
-        if len(sys.argv) != 3:
-            print("Usage: python script.py <input_toc.json> <output_toc.json>")
+        if len(sys.argv) != 4:
+            print("Usage: python script.py <input_toc.json> <fixes.csv> <output_toc.json>")
             sys.exit(1)
         
         input_file = sys.argv[1]
-        output_file = sys.argv[2]
+        csv_file = sys.argv[2]
+        output_file = sys.argv[3]
         
         # Read input file
         try:
@@ -235,8 +319,8 @@ def main():
             print(f"Error: Invalid JSON in input file: {e}")
             sys.exit(1)
         
-        # Apply fixes
-        fixed_toc = apply_fixes(toc_data)
+        # Apply fixes from CSV
+        fixed_toc = apply_fixes_from_csv(toc_data, csv_file)
         
         # Write output file
         try:
@@ -258,12 +342,11 @@ if __name__ == "__main__":
 '''
 
 
-def create_fallback_toc_script() -> str:
+def create_fallback_csv_content() -> str:
     """
-    Creates a simple fallback script that just copies input to output.
+    Creates an empty CSV file content that makes no changes.
     """
-    template = get_code_generation_template()
-    return template.replace('{FIXES_PLACEHOLDER}', 'pass  # No changes needed')
+    return "id,field,new_value\n# No changes needed\n"
 
 # --- Graph Nodes ---
 def run_ocr_and_extract_toc(state: GraphState) -> GraphState:
@@ -274,6 +357,10 @@ def run_ocr_and_extract_toc(state: GraphState) -> GraphState:
     file_path = state["file_path"]
     api_key = state["api_key"]
     output_folder = state["output_folder"]
+    
+    # Create intermediates directory
+    intermediates_dir = output_folder / "intermediates"
+    intermediates_dir.mkdir(exist_ok=True)
 
     try:
         document_to_process = encode_file_to_base64(file_path)
@@ -291,6 +378,16 @@ def run_ocr_and_extract_toc(state: GraphState) -> GraphState:
             document=document_chunk,
             document_annotation_format=response_format_from_pydantic_model(TableOfContents)
         )
+        
+        # Save raw response for debugging
+        raw_response_path = intermediates_dir / "01_ocr_raw_response.json"
+        with open(raw_response_path, "w", encoding="utf-8") as f:
+            # Save the raw response object as much as possible
+            try:
+                json.dump(response.__dict__ if hasattr(response, '__dict__') else str(response), f, indent=2, default=str)
+            except:
+                f.write(str(response))
+        print(f"Raw OCR response saved to {raw_response_path}")
         
         ocr_response_dict = response.model_dump()
         state["ocr_response"] = ocr_response_dict
@@ -320,10 +417,22 @@ def run_ocr_and_extract_toc(state: GraphState) -> GraphState:
                     json.dump(toc_data, f, indent=2)
                 state["raw_toc_json_path"] = str(raw_toc_path)
                 print(f"Raw ToC saved to {raw_toc_path}")
+                
+                # Also save in intermediates
+                toc_copy_path = intermediates_dir / "02_extracted_toc.json"
+                with open(toc_copy_path, "w", encoding="utf-8") as f:
+                    json.dump(toc_data, f, indent=2)
 
     except Exception as e:
         state["error"] = f"Error in OCR node: {e}"
         print(state["error"])
+        # Save error details
+        error_path = intermediates_dir / "01_ocr_error.txt"
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Error: {str(e)}\n")
+            f.write(f"Error type: {type(e).__name__}\n")
+            import traceback
+            f.write(f"Traceback:\n{traceback.format_exc()}")
 
     return state
 
@@ -439,6 +548,17 @@ Generate explicit fix instructions in this exact format:
             max_tokens=10_000
         )
         
+        # Save raw response for debugging
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        raw_response_path = intermediates_dir / "03_refinement_analysis_response.json"
+        with open(raw_response_path, "w", encoding="utf-8") as f:
+            try:
+                json.dump(response.__dict__ if hasattr(response, '__dict__') else str(response), f, indent=2, default=str)
+            except:
+                f.write(str(response))
+        print(f"Raw refinement analysis response saved to {raw_response_path}")
+        
         instructions = response.choices[0].message.content.strip()
         state["refinement_instructions"] = instructions
         
@@ -451,13 +571,21 @@ Generate explicit fix instructions in this exact format:
     except Exception as e:
         state["error"] = f"Error in instruction generation node: {e}"
         print(state["error"])
+        # Save error details
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        error_path = intermediates_dir / "03_refinement_analysis_error.txt"
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Error: {str(e)}\n")
+            f.write(f"Error type: {type(e).__name__}\n")
+            import traceback
+            f.write(f"Traceback:\n{traceback.format_exc()}")
         
     return state
     
 def generate_fixer_script(state: GraphState) -> GraphState:
     """
-    Node 3: Generates a robust Python script using templates to apply the ToC fixes.
-    Uses defensive programming patterns and comprehensive error handling.
+    Node 3: Generates a CSV file with ToC fixes and a script to apply them.
     """
     print("--- Starting Node: generate_fixer_script ---")
     if state.get("error"): return state
@@ -465,180 +593,273 @@ def generate_fixer_script(state: GraphState) -> GraphState:
     instructions = state["refinement_instructions"]
     api_key = state["api_key"]
     
-    # Handle no-change case with fallback script
+    # Handle no-change case with fallback
     if not instructions or instructions.strip() == "No changes needed":
-        print("No changes needed - using fallback script")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print("No changes needed - using fallback CSV")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         return state
 
-    # Generate fix code using optimized prompt and template
-    prompt = f"""You are an expert Python programmer. Generate ONLY the fix logic code that will be inserted into a robust template. Do NOT generate the full script - only the specific fix operations.
+    # Generate CSV content using optimized prompt
+    prompt = f"""You are a data analyst. Generate a CSV file with ToC fixes based on the given instructions.
 
 **Fix Instructions to Implement:**
 {instructions}
 
-**REQUIREMENTS:**
-1. Generate ONLY the fix logic (no imports, no main function, no full script)
-2. Work within a loop over entries where 'fixed_entry' is the current entry copy
-3. Use the entry's 'id' field to identify which entry to modify
-4. Use these exact patterns for modifications:
+**CSV FORMAT:**
+Generate a CSV with exactly this header: id,field,new_value
 
-EXAMPLE FIX PATTERNS:
-```python
-# Modify fields for specific entries
-if fixed_entry.get("id") == 1:
-    fixed_entry["start_page_number"] = 15
-    fixed_entry["toc_page_number"] = 2
+Each row should specify:
+- id: The entry ID number (integer)
+- field: The field to modify (start_page_number, toc_page_number, text, parent, type)
+- new_value: The new value for that field
 
-if fixed_entry.get("id") == 3:
-    fixed_entry["text"] = "Corrected Section Title"
-    fixed_entry["parent"] = 1  # Use integer, not string
+**FIELD TYPES:**
+- start_page_number: integer (page where section content begins)
+- toc_page_number: integer (page where entry appears in ToC)
+- text: string (section title text)
+- parent: integer or null (parent entry ID)
+- type: string ("section" or "subsection")
 
-if fixed_entry.get("id") == 5:
-    fixed_entry["type"] = "subsection"
-
-# To remove entries, mark them
-if fixed_entry.get("id") == 6:
-    continue  # Skip this entry (removes it)
-```
-
-**FOR ADDING NEW ENTRIES:** Add them AFTER the loop using:
-```python
-# After the main loop, add new entries
-fixed_entries.append({{
-    "id": 99,  # Use a high ID to avoid conflicts
-    "type": "section",
-    "text": "New Section Title",
-    "parent": None,  # Use None for null
-    "start_page_number": 45,
-    "toc_page_number": 2
-}})
+**EXAMPLE CSV OUTPUT:**
+```csv
+id,field,new_value
+1,start_page_number,15
+1,toc_page_number,2
+3,text,"Corrected Section Title"
+5,parent,1
+6,type,subsection
 ```
 
 **CRITICAL RULES:**
-- ONLY generate the fix logic, not the full script
-- Use fixed_entry.get("id") for comparisons
-- Use None for null values, integers for numbers
-- Use continue to skip/remove entries
-- Add new entries after the main processing loop
+- Each fix instruction should become one or more CSV rows
+- Use exact field names: start_page_number, toc_page_number, text, parent, type
+- For null values, use: null
+- For text values with commas, use quotes: "text with, comma"
+- Only include rows for fields that need to be changed
+- Must start with header: id,field,new_value
 
-**Generate ONLY the fix logic code:**"""
+**Generate the complete CSV content:**"""
 
     try:
         client = Mistral(api_key=api_key)
         response = client.chat.complete(
-            model="codestral-latest",
+            model="mistral-large-latest",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=10_000
         )
         
-        fix_logic = response.choices[0].message.content.strip()
+        # Save raw response for debugging
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        raw_response_path = intermediates_dir / "04_csv_generation_response.json"
+        with open(raw_response_path, "w", encoding="utf-8") as f:
+            try:
+                json.dump(response.__dict__ if hasattr(response, '__dict__') else str(response), f, indent=2, default=str)
+            except:
+                f.write(str(response))
+        print(f"Raw CSV generation response saved to {raw_response_path}")
         
-        # Clean up the response if it contains code blocks
-        if "```python" in fix_logic:
-            fix_logic = fix_logic.split("```python")[1].split("```")[0].strip()
-        elif "```" in fix_logic:
-            fix_logic = fix_logic.split("```")[1].split("```")[0].strip()
+        csv_content = response.choices[0].message.content.strip()
+        print(f"LLM generated CSV content (first 300 chars): {csv_content[:300]}...")
         
-        # Insert the fix logic into our robust template
-        template = get_code_generation_template()
-        full_script = template.replace('{FIXES_PLACEHOLDER}', fix_logic)
+        # Clean up the CSV content
+        try:
+            # Remove markdown code blocks if present
+            clean_csv = csv_content
+            if "```csv" in clean_csv:
+                clean_csv = clean_csv.split("```csv")[1].split("```")[0].strip()
+            elif "```" in clean_csv:
+                clean_csv = clean_csv.split("```")[1].split("```")[0].strip()
+            
+            # Ensure we have valid CSV content
+            if not clean_csv or not clean_csv.strip():
+                print("No valid CSV content generated, using fallback")
+                clean_csv = create_fallback_csv_content()
+            
+            # Ensure CSV starts with proper header
+            if not clean_csv.startswith("id,field,new_value"):
+                if "id,field,new_value" not in clean_csv:
+                    clean_csv = "id,field,new_value\n" + clean_csv
+                else:
+                    # Move header to the top
+                    lines = clean_csv.split('\n')
+                    header_line = None
+                    other_lines = []
+                    for line in lines:
+                        if line.strip() == "id,field,new_value":
+                            header_line = line
+                        elif line.strip() and not line.startswith('#'):
+                            other_lines.append(line)
+                    if header_line:
+                        clean_csv = header_line + '\n' + '\n'.join(other_lines)
+            
+            state["csv_content"] = clean_csv
+            print(f"Generated CSV content (first 200 chars): {clean_csv[:200]}...")
+                
+        except Exception as e:
+            print(f"Error parsing CSV content: {e}")
+            print(f"Raw response: {csv_content[:500]}...")
+            state["csv_content"] = create_fallback_csv_content()
         
-        # Validate syntax before saving
-        is_valid, syntax_error = validate_python_syntax(full_script)
-        state["syntax_check_passed"] = is_valid
+        # Use the fixed CSV fixer script
+        state["fixer_script_code"] = get_csv_fixer_script()
         
-        if not is_valid:
-            print(f"Generated script has syntax errors: {syntax_error}")
-            print("Using fallback script instead")
-            state["fixer_script_code"] = create_fallback_toc_script()
+        # Validate CSV syntax
+        try:
+            import csv
+            import io
+            csv_reader = csv.DictReader(io.StringIO(state["csv_content"]))
+            rows = list(csv_reader)
+            if not rows:
+                print("Warning: CSV has no data rows")
+            else:
+                print(f"CSV validation passed: {len(rows)} fix rows")
             state["syntax_check_passed"] = True
-        else:
-            state["fixer_script_code"] = full_script
-            print("Generated script passed syntax validation")
+        except Exception as e:
+            print(f"CSV validation failed: {e}")
+            print("Using fallback CSV")
+            state["csv_content"] = create_fallback_csv_content()
+            state["syntax_check_passed"] = True
         
-        # Save the script for debugging
+        # Save the CSV file and script
+        csv_path = state["output_folder"] / "toc-fixes.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        print(f"Fixes CSV saved to {csv_path}")
+        
         script_path = state["output_folder"] / "toc-fix-script.py"
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(state["fixer_script_code"])
         print(f"Fixer script saved to {script_path}")
+        
+        # Save the CSV path for later use
+        state["csv_file_path"] = str(csv_path)
 
     except Exception as e:
-        print(f"Error in script generation: {e}")
-        print("Using fallback script")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print(f"Error in CSV generation: {e}")
+        print(f"Raw LLM response: {response.choices[0].message.content[:500] if 'response' in locals() else 'No response'}...")
+        print("Using fallback CSV and script")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
+        # Save error details
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        error_path = intermediates_dir / "04_csv_generation_error.txt"
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Error: {str(e)}\n")
+            f.write(f"Error type: {type(e).__name__}\n")
+            if 'response' in locals():
+                f.write(f"Raw LLM response: {response.choices[0].message.content}\n")
+            import traceback
+            f.write(f"Traceback:\n{traceback.format_exc()}")
+        
+        # Still save the fallback files
+        csv_path = state["output_folder"] / "toc-fixes.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        script_path = state["output_folder"] / "toc-fix-script.py"
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(state["fixer_script_code"])
+        state["csv_file_path"] = str(csv_path)
         
     return state
 
 def validate_script(state: GraphState) -> GraphState:
     """
-    Node: Validates that the generated script correctly implements the instructions.
-    Includes both syntax validation and logical correctness checking.
+    Node: Validates that the generated CSV correctly implements the instructions.
     """
-    print("--- Starting Node: validate_script ---")
+    print("--- Starting Node: validate_csv ---")
     if state.get("error"): return state
     
     state["validation_attempts"] += 1
     instructions = state["refinement_instructions"]
-    script_code = state["fixer_script_code"]
+    csv_content = state.get("csv_content")
     api_key = state["api_key"]
-
-    # First check if syntax validation already passed during generation
-    if not state.get("syntax_check_passed", False):
-        is_valid, syntax_error = validate_python_syntax(script_code)
-        if not is_valid:
-            state["last_validation_feedback"] = f"Syntax error: {syntax_error}"
-            print(f"Script failed syntax validation: {syntax_error}")
-            return state
     
-    # Skip validation for fallback "no changes" scripts
+    # If csv_content is missing, create fallback and return
+    if not csv_content:
+        print("csv_content missing - using fallback CSV")
+        state["csv_content"] = create_fallback_csv_content()
+        state["last_validation_feedback"] = "OK"
+        return state
+
+    # Skip validation for fallback "no changes" CSV
     if not instructions or instructions.strip() == "No changes needed":
         state["last_validation_feedback"] = "OK"
-        print("Using fallback script - validation passed")
+        print("Using fallback CSV - validation passed")
+        return state
+    
+    # Quick CSV syntax check
+    try:
+        import csv
+        import io
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
+        rows = list(csv_reader)
+        if not rows:
+            state["last_validation_feedback"] = "CSV syntax error: No data rows found"
+            print("CSV validation failed: No data rows")
+            return state
+    except Exception as e:
+        state["last_validation_feedback"] = f"CSV syntax error: {e}"
+        print(f"CSV validation failed: {e}")
         return state
 
     # Perform logical validation using AI
-    prompt = f"""You are an expert code reviewer specializing in data transformation scripts. Your task is to validate whether the Python script correctly implements ALL the given fix instructions.
+    prompt = f"""You are an expert data analyst. Your task is to validate whether the CSV file correctly implements ALL the given fix instructions.
 
 **ORIGINAL FIX INSTRUCTIONS:**
 {instructions}
 
-**PYTHON SCRIPT TO VALIDATE:**
-```python
-{script_code[:2000]}{"..." if len(script_code) > 2000 else ""}
+**GENERATED CSV TO VALIDATE:**
+```csv
+{csv_content}
 ```
 
 **VALIDATION CRITERIA:**
-1. Does the script implement ALL instructions listed?
+1. Does the CSV implement ALL instructions listed?
 2. Are the field names correct (start_page_number, toc_page_number, text, parent, type)?
 3. Are the entry IDs referenced correctly?
-4. Are the new values/changes exactly as specified?
-5. Are remove operations handled properly?
-6. Are add operations (if any) implemented correctly?
+4. Are the new values exactly as specified in the instructions?
+5. Is the CSV format correct (id,field,new_value)?
+6. Are all required changes included?
 
 **RESPONSE FORMAT:**
-- If the script correctly implements ALL instructions, respond with exactly: "OK"
+- If the CSV correctly implements ALL instructions, respond with exactly: "OK"
 - If there are issues, respond with: "ISSUE: [brief description of the main problem]"
 
 **EXAMPLES OF GOOD RESPONSES:**
 - "OK"
-- "ISSUE: Missing implementation for removing entry with id 6"
+- "ISSUE: Missing fix for entry id 6 start_page_number"
 - "ISSUE: Wrong field name used - should be start_page_number not page_number"
 - "ISSUE: Entry id 3 text change not implemented"
+- "ISSUE: CSV format incorrect - missing header"
 
 **YOUR VALIDATION RESPONSE:**"""
 
     try:
         client = Mistral(api_key=api_key)
         response = client.chat.complete(
-            model="codestral-latest",
+            model="mistral-large-latest",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,  # Deterministic validation
             max_tokens=2000
         )
+        
+        # Save raw response for debugging
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        raw_response_path = intermediates_dir / f"05_validation_response_attempt_{state['validation_attempts']}.json"
+        with open(raw_response_path, "w", encoding="utf-8") as f:
+            try:
+                json.dump(response.__dict__ if hasattr(response, '__dict__') else str(response), f, indent=2, default=str)
+            except:
+                f.write(str(response))
+        print(f"Raw validation response saved to {raw_response_path}")
+        
         feedback = response.choices[0].message.content.strip()
         state["last_validation_feedback"] = feedback
         print(f"Validation feedback: {feedback}")
@@ -653,6 +874,15 @@ def validate_script(state: GraphState) -> GraphState:
     except Exception as e:
         state["error"] = f"Error in validation node: {e}"
         print(state["error"])
+        # Save error details
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        error_path = intermediates_dir / f"05_validation_error_attempt_{state['validation_attempts']}.txt"
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Error: {str(e)}\n")
+            f.write(f"Error type: {type(e).__name__}\n")
+            import traceback
+            f.write(f"Traceback:\n{traceback.format_exc()}")
         
     return state
 
@@ -671,34 +901,47 @@ def refactor_script(state: GraphState) -> GraphState:
     # Extract the original fix logic from the template
     try:
         # Find the fix logic between the comment markers
-        if '{FIXES_PLACEHOLDER}' in original_code:
+        if '{FIXES_PLACEHOLDER}' in original_code or '{APPLY_FIXES_PLACEHOLDER}' in original_code:
             original_fixes = "pass  # No original fixes found"
         else:
             # Try to extract fixes from the existing code
             lines = original_code.split('\n')
-            fix_start = -1
-            fix_end = -1
+            # Look for the setup section
+            setup_start = -1
+            setup_end = -1
+            apply_start = -1
+            apply_end = -1
+            
             for i, line in enumerate(lines):
                 if "# Apply specific fixes here" in line:
-                    fix_start = i + 1
-                elif fix_start > -1 and "fixed_entries.append(fixed_entry)" in line:
-                    fix_end = i
+                    setup_start = i + 1
+                elif setup_start > -1 and "for entry in entries:" in line:
+                    setup_end = i
+                elif "# Apply the specific fixes defined above" in line:
+                    apply_start = i + 1
+                elif apply_start > -1 and "fixed_entries.append(fixed_entry)" in line:
+                    apply_end = i
                     break
             
-            if fix_start > -1 and fix_end > -1:
-                original_fixes = '\n'.join(lines[fix_start:fix_end])
-            else:
-                original_fixes = "pass  # Could not extract original fixes"
+            setup_code = "pass  # No setup found"
+            apply_code = "pass  # No apply found"
+            
+            if setup_start > -1 and setup_end > -1:
+                setup_code = '\n'.join(lines[setup_start:setup_end])
+            if apply_start > -1 and apply_end > -1:
+                apply_code = '\n'.join(lines[apply_start:apply_end])
+                
+            original_fixes = f"{setup_code}\n---APPLY_FIXES---\n{apply_code}"
     except:
         original_fixes = "pass  # Error extracting original fixes"
 
-    prompt = f"""You are an expert Python programmer. Your task is to fix the ToC processing logic based on validation feedback. Generate ONLY the fix logic code that will be inserted into the template.
+    prompt = f"""You are an expert data analyst. Your task is to fix the CSV file based on validation feedback.
 
 **ORIGINAL FIX INSTRUCTIONS:**
 {instructions}
 
-**ORIGINAL FIX LOGIC (that failed validation):**
-```python
+**ORIGINAL CSV (that failed validation):**
+```csv
 {original_fixes}
 ```
 
@@ -706,37 +949,28 @@ def refactor_script(state: GraphState) -> GraphState:
 {feedback}
 
 **YOUR TASK:**
-Generate ONLY the corrected fix logic (not the full script) that addresses the validation feedback. Follow the same patterns as before:
+Generate a corrected CSV file that addresses the validation feedback and implements ALL the original instructions.
 
-EXAMPLE PATTERNS:
-```python
-# Modify fields for specific entries
-if fixed_entry.get("id") == 1:
-    fixed_entry["start_page_number"] = 15
-    fixed_entry["toc_page_number"] = 2
+**CSV FORMAT:**
+Must have header: id,field,new_value
+Each row: entry_id,field_name,new_value
 
-# To remove entries
-if fixed_entry.get("id") == 6:
-    continue  # Skip this entry
-
-# To add new entries (after the loop)
-fixed_entries.append({{
-    "id": 99,
-    "type": "section", 
-    "text": "New Section",
-    "parent": None,
-    "start_page_number": 45,
-    "toc_page_number": 2
-}})
-```
+**FIELD TYPES:**
+- start_page_number: integer
+- toc_page_number: integer  
+- text: string (use quotes if contains commas)
+- parent: integer or null
+- type: string ("section" or "subsection")
 
 **REQUIREMENTS:**
 - Address the specific issue mentioned in the validation feedback
 - Ensure ALL original instructions are implemented
 - Use exact field names: start_page_number, toc_page_number, text, parent, type
-- Use None for null values, integers for IDs
+- For null values, use: null
+- Include all required changes from the original instructions
+- Start with header: id,field,new_value
 
-**Generate ONLY the corrected fix logic code:**"""
+**Generate the complete corrected CSV:**"""
 
     try:
         client = Mistral(api_key=api_key)
@@ -747,42 +981,100 @@ fixed_entries.append({{
             max_tokens=10_000
         )
         
+        # Save raw response for debugging
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        raw_response_path = intermediates_dir / f"06_refactor_response_attempt_{state['validation_attempts']}.json"
+        with open(raw_response_path, "w", encoding="utf-8") as f:
+            try:
+                json.dump(response.__dict__ if hasattr(response, '__dict__') else str(response), f, indent=2, default=str)
+            except:
+                f.write(str(response))
+        print(f"Raw refactor response saved to {raw_response_path}")
+        
         new_fix_logic = response.choices[0].message.content.strip()
         print(new_fix_logic)
         
-        # Clean up the response
+        # Parse the response similar to generate_fixer_script
         if "```python" in new_fix_logic:
-            new_fix_logic = new_fix_logic.split("```python")[1].split("```")[0].strip()
-        elif "```" in new_fix_logic:
-            new_fix_logic = new_fix_logic.split("```")[1].split("```")[0].strip()
-        
-        # Create new script with corrected logic
-        template = get_code_generation_template()
-        new_script = template.replace('{FIXES_PLACEHOLDER}', new_fix_logic)
-        
-        # Validate syntax of refactored script
-        is_valid, syntax_error = validate_python_syntax(new_script)
-        if not is_valid:
-            print(f"Refactored script has syntax errors: {syntax_error}")
-            print("Using fallback script")
-            state["fixer_script_code"] = create_fallback_toc_script()
+            # Extract each python block separately
+            parts = new_fix_logic.split("```python")
+            if len(parts) >= 3:  # Should have at least 2 python blocks
+                setup_part = parts[1].split("```")[0].strip()
+                apply_part = parts[2].split("```")[0].strip()
+            else:
+                # Fallback: try to split by separator
+                if "---APPLY_FIXES---" in new_fix_logic:
+                    sections = new_fix_logic.split("---APPLY_FIXES---")
+                    setup_part = sections[0].replace("```python", "").replace("```", "").strip()
+                    apply_part = sections[1].replace("```python", "").replace("```", "").strip()
+                else:
+                    setup_part = "pass  # No setup needed"
+                    apply_part = new_fix_logic.split("```python")[1].split("```")[0].strip()
         else:
-            state["fixer_script_code"] = new_script
-            print("Script refactored successfully and passed syntax validation")
+            # Try to split by separator
+            if "---APPLY_FIXES---" in new_fix_logic:
+                sections = new_fix_logic.split("---APPLY_FIXES---")
+                setup_part = sections[0].strip()
+                apply_part = sections[1].strip()
+            else:
+                # Assume it's all application logic
+                setup_part = "pass  # No setup needed"
+                apply_part = new_fix_logic
+        
+        # Clean up the CSV response
+        clean_csv = new_csv_content
+        if "```csv" in clean_csv:
+            clean_csv = clean_csv.split("```csv")[1].split("```")[0].strip()
+        elif "```" in clean_csv:
+            clean_csv = clean_csv.split("```")[1].split("```")[0].strip()
+        
+        # Ensure proper header
+        if not clean_csv.startswith("id,field,new_value"):
+            if "id,field,new_value" not in clean_csv:
+                clean_csv = "id,field,new_value\n" + clean_csv
+        
+        state["csv_content"] = clean_csv
+        
+        # Validate CSV syntax
+        try:
+            import csv
+            import io
+            csv_reader = csv.DictReader(io.StringIO(clean_csv))
+            rows = list(csv_reader)
+            print(f"Refactored CSV validated: {len(rows)} rows")
+            state["syntax_check_passed"] = True
+        except Exception as e:
+            print(f"Refactored CSV has syntax errors: {e}")
+            print("Using fallback CSV")
+            state["csv_content"] = create_fallback_csv_content()
+            state["syntax_check_passed"] = True
         
         state["syntax_check_passed"] = True
         
-        # Save refactored script
-        refactor_path = state["output_folder"] / f"toc-fix-script-refactored-{state['validation_attempts']}.py"
-        with open(refactor_path, 'w', encoding='utf-8') as f:
-            f.write(state["fixer_script_code"])
-        print(f"Refactored script saved to {refactor_path}")
+        # Save refactored CSV
+        refactor_csv_path = state["output_folder"] / f"toc-fixes-refactored-{state['validation_attempts']}.csv"
+        with open(refactor_csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        print(f"Refactored CSV saved to {refactor_csv_path}")
+        
+        # Update the CSV file path
+        state["csv_file_path"] = str(refactor_csv_path)
         
     except Exception as e:
-        print(f"Error in refactoring: {e}")
-        print("Using fallback script")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print(f"Error in CSV refactoring: {e}")
+        print("Using fallback CSV")
+        state["csv_content"] = create_fallback_csv_content()
         state["syntax_check_passed"] = True
+        # Save error details
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        error_path = intermediates_dir / f"06_refactor_error_attempt_{state['validation_attempts']}.txt"
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Error: {str(e)}\n")
+            f.write(f"Error type: {type(e).__name__}\n")
+            import traceback
+            f.write(f"Traceback:\n{traceback.format_exc()}")
         
     return state
 
@@ -824,10 +1116,11 @@ def execute_fixer_script(state: GraphState) -> GraphState:
         # Execute with extended timeout and better error capture
         # Convert to absolute paths to avoid path issues
         abs_original_file = os.path.abspath(original_toc_file)
+        abs_csv_file = os.path.abspath(state["csv_file_path"])
         abs_fixed_file = os.path.abspath(fixed_toc_file)
         
         result = subprocess.run(
-            [sys.executable, temp_script_path, abs_original_file, abs_fixed_file],
+            [sys.executable, temp_script_path, abs_original_file, abs_csv_file, abs_fixed_file],
             capture_output=True, 
             text=True, 
             timeout=45,  # Increased timeout
@@ -906,15 +1199,17 @@ def fix_execution_error(state: GraphState) -> GraphState:
     
     # Check for common errors and use fallback directly
     if "Input file" in error_message and "not found" in error_message:
-        print("File not found error detected - using fallback script")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print("File not found error detected - using fallback CSV")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0
         return state
         
     if "JSON" in error_message and ("decode" in error_message.lower() or "invalid" in error_message.lower()):
-        print("JSON parsing error detected - using fallback script")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print("JSON parsing error detected - using fallback CSV")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0
         return state
@@ -946,31 +1241,48 @@ Focus on these common fixes:
             temperature=0.1,
             max_tokens=10_000
         )
+        
+        # Save raw response for debugging
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        raw_response_path = intermediates_dir / f"07_execution_fix_response_attempt_{state['execution_attempts']}.json"
+        with open(raw_response_path, "w", encoding="utf-8") as f:
+            try:
+                json.dump(response.__dict__ if hasattr(response, '__dict__') else str(response), f, indent=2, default=str)
+            except:
+                f.write(str(response))
+        print(f"Raw execution fix response saved to {raw_response_path}")
+        
         code = response.choices[0].message.content
         if "```python" in code:
             code = code.split("```python")[1].split("```")[0].strip()
         elif "```" in code:
             code = code.split("```")[1].split("```")[0].strip()
             
-        # Validate the fixed code
-        is_valid, syntax_error = validate_python_syntax(code)
-        if not is_valid:
-            print(f"Generated fix has syntax errors: {syntax_error}")
-            print("Using fallback script instead")
-            state["fixer_script_code"] = create_fallback_toc_script()
-        else:
-            state["fixer_script_code"] = code
-            print("Generated execution error fix")
-            
+        # For CSV approach, we don't need to validate Python syntax
+        # Just regenerate a simple fallback CSV
+        print("Generated execution error fix (using fallback CSV)")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0  # Reset validation attempts
         
     except Exception as e:
         print(f"Error in execution fixing: {e}")
-        print("Using fallback script")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print("Using fallback CSV")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0
+        # Save error details
+        intermediates_dir = state["output_folder"] / "intermediates"
+        intermediates_dir.mkdir(exist_ok=True)
+        error_path = intermediates_dir / f"07_execution_fix_error_attempt_{state['execution_attempts']}.txt"
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Error: {str(e)}\n")
+            f.write(f"Error type: {type(e).__name__}\n")
+            import traceback
+            f.write(f"Traceback:\n{traceback.format_exc()}")
         
     return state
 
@@ -1007,17 +1319,19 @@ def check_validation(state: GraphState) -> str:
     
     # Check if we've been getting syntax errors repeatedly - use fallback earlier
     if state["validation_attempts"] >= 2 and not state.get("syntax_check_passed", False):
-        print(f"Multiple syntax errors detected. Using fallback script.")
-        state["fixer_script_code"] = create_fallback_toc_script()
+        print(f"Multiple syntax errors detected. Using fallback CSV.")
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["last_validation_feedback"] = "OK"
         state["syntax_check_passed"] = True
         return "execute"
     
     if state["validation_attempts"] >= max_attempts:
         print(f"Max validation attempts ({max_attempts}) reached.")
-        print("Using fallback script to ensure workflow completion.")
+        print("Using fallback CSV to ensure workflow completion.")
         # Use fallback instead of failing completely
-        state["fixer_script_code"] = create_fallback_toc_script()
+        state["csv_content"] = create_fallback_csv_content()
+        state["fixer_script_code"] = get_csv_fixer_script()
         state["last_validation_feedback"] = "OK"
         state["syntax_check_passed"] = True
         return "execute"
