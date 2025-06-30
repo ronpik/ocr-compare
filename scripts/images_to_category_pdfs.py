@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Convert categorized images to PDF files
+Convert categorized images to PDF files for multiple volumes.
 
-This script processes a folder containing images organized by categories (cover, intro, toc)
+This script processes a root folder containing multiple volume subfolders.
+For each volume, it finds images organized by category (cover, intro, toc)
 and creates a separate PDF for each category containing all images in order.
 
 Usage:
-    python images_to_category_pdfs.py /path/to/volume/folder
-    python images_to_category_pdfs.py /path/to/volume/folder --output-dir ./pdfs
+    python images_to_category_pdfs.py /path/to/root/folder/with/volumes
+    python images_to_category_pdfs.py /path/to/root/folder --output-dir ./all_pdfs
 """
 
 import os
@@ -21,7 +22,7 @@ from typing_extensions import Annotated
 
 
 app = typer.Typer(
-    help="Convert categorized images (cover, intro, toc) to separate PDF files"
+    help="Convert categorized images (cover, intro, toc) from multiple volume folders into separate PDF files."
 )
 
 
@@ -123,11 +124,15 @@ def main(
         str,
         typer.Argument(help="Path to the volume folder containing categorized images")
     ],
+    root_folder: Annotated[
+        str,
+        typer.Argument(help="Path to the root folder containing volume subfolders.")
+    ],
     output_dir: Annotated[
         str,
         typer.Option(
             "--output-dir",
-            help="Directory to save the PDF files (default: same as input folder)"
+            help="Root directory to save the PDF files. A subfolder will be created for each volume."
         )
     ] = None,
     verbose: Annotated[
@@ -139,68 +144,64 @@ def main(
     ] = False
 ) -> None:
     """
-    Process a volume folder and create PDFs for each category.
+    Process a root folder containing volume subfolders and create PDFs for each category within each volume.
     """
     # Validate input folder
-    folder_path = Path(volume_folder)
-    if not folder_path.exists():
-        print(f"Error: Folder '{volume_folder}' does not exist")
+    root_path = Path(root_folder)
+    if not root_path.is_dir():
+        print(f"Error: Root folder '{root_folder}' does not exist or is not a directory.")
         raise typer.Exit(code=1)
-    
-    if not folder_path.is_dir():
-        print(f"Error: '{volume_folder}' is not a directory")
+
+    # Get a list of all immediate subdirectories
+    volume_folders = [d for d in root_path.iterdir() if d.is_dir()]
+    if not volume_folders:
+        print(f"No volume subfolders found in '{root_folder}'.")
         raise typer.Exit(code=1)
+
+    print(f"Found {len(volume_folders)} volume folders to process in '{root_folder}'.")
     
-    # Set output directory
-    if output_dir:
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-    else:
-        output_path = folder_path
+    total_pdfs_created = 0
+
+    for volume_path in volume_folders:
+        print(f"\n--- Processing Volume: {volume_path.name} ---")
+
+        # Set output directory for the current volume
+        current_output_path = Path(output_dir) / volume_path.name if output_dir else volume_path
+        current_output_path.mkdir(parents=True, exist_ok=True)
+        
+        if verbose:
+            print(f"Output directory for this volume: {current_output_path}")
+
+        # Collect images by category
+        categories = collect_images_by_category(volume_path)
+        
+        # Report findings
+        total_images = sum(len(imgs) for imgs in categories.values())
+        if total_images == 0:
+            print("No categorized images found (e.g., toc-1.jpg). Skipping.")
+            continue
+        
+        if verbose:
+            print(f"Found {total_images} categorized images.")
+
+        # Create PDFs for each category
+        created_pdfs_for_volume = 0
+        for category, images in categories.items():
+            if images:
+                pdf_path = current_output_path / f"{category}.pdf"
+                try:
+                    create_pdf_from_images(images, pdf_path)
+                    created_pdfs_for_volume += 1
+                except Exception as e:
+                    print(f"Error creating {category}.pdf for volume {volume_path.name}: {e}")
+        
+        if created_pdfs_for_volume > 0:
+            print(f"Successfully created {created_pdfs_for_volume} PDF(s) for volume {volume_path.name}.")
+            total_pdfs_created += created_pdfs_for_volume
     
-    print(f"Processing folder: {folder_path}")
-    print(f"Output directory: {output_path}")
-    
-    # Collect images by category
-    categories = collect_images_by_category(folder_path)
-    
-    # Report findings
-    total_images = 0
-    for category, images in categories.items():
-        if images:
-            print(f"\nFound {len(images)} {category} images:")
-            if verbose:
-                for order, path in images:
-                    print(f"  {category}-{order}: {path.name}")
-            total_images += len(images)
-    
-    if total_images == 0:
-        print("\nNo categorized images found in the folder.")
-        print("Expected format: category-number.extension")
-        print("Categories: cover, intro, toc")
-        print("Example: cover-1.jpg, intro-1.jpg, toc-1.jpg")
-        raise typer.Exit(code=1)
-    
-    # Create PDFs for each category
-    print(f"\nCreating PDFs...")
-    created_pdfs = []
-    
-    for category, images in categories.items():
-        if images:
-            pdf_path = output_path / f"{category}.pdf"
-            try:
-                create_pdf_from_images(images, pdf_path)
-                created_pdfs.append(pdf_path)
-            except Exception as e:
-                print(f"Error creating {category}.pdf: {e}")
-    
-    # Summary
-    if created_pdfs:
-        print(f"\nSuccessfully created {len(created_pdfs)} PDF files:")
-        for pdf in created_pdfs:
-            print(f"  - {pdf}")
-    else:
-        print("\nNo PDFs were created.")
+    print(f"\n--- Summary ---")
+    print(f"Processed {len(volume_folders)} volume folders.")
+    print(f"Total PDFs created: {total_pdfs_created}")
 
 
 if __name__ == "__main__":
