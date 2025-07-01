@@ -12,8 +12,9 @@ from .toc.models import TableOfContents
 
 class CoverInfo(BaseModel):
     """Information about the book cover."""
-    original: Optional[str] = Field(None, description="Path to the original cover image")
+    original: Optional[str] = Field(None, description="Relative path to the original cover image (cover-1.png)")
     thumbnail: Optional[str] = Field(None, description="Path to the generated thumbnail")
+    thumbnail_base64: Optional[str] = Field(None, description="Base64 encoded thumbnail for web display")
 
 
 class BookProcessingResult(BaseModel):

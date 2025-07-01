@@ -7,6 +7,7 @@ Mistral's OCR capabilities, extracted from the original CLI script.
 
 import os
 import json
+import uuid
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -48,6 +49,8 @@ class MistralOCR:
         image_min_size: Optional[int] = None,
         bbox_annotation_format: Optional[Dict[str, Any]] = None,
         document_annotation_format: Optional[Dict[str, Any]] = None,
+        intermediates_dir: Optional[Path] = None,
+        response_prefix: str = "ocr_response",
     ) -> Dict[str, Any]:
         """
         Process a local file with OCR.
@@ -92,7 +95,9 @@ class MistralOCR:
             image_limit=image_limit,
             image_min_size=image_min_size,
             bbox_annotation_format=bbox_annotation_format,
-            document_annotation_format=document_annotation_format
+            document_annotation_format=document_annotation_format,
+            intermediates_dir=intermediates_dir,
+            response_prefix=response_prefix
         )
     
     def process_url(
@@ -104,6 +109,8 @@ class MistralOCR:
         image_min_size: Optional[int] = None,
         bbox_annotation_format: Optional[Dict[str, Any]] = None,
         document_annotation_format: Optional[Dict[str, Any]] = None,
+        intermediates_dir: Optional[Path] = None,
+        response_prefix: str = "ocr_response",
     ) -> Dict[str, Any]:
         """
         Process a document from URL with OCR.
@@ -127,7 +134,9 @@ class MistralOCR:
             image_limit=image_limit,
             image_min_size=image_min_size,
             bbox_annotation_format=bbox_annotation_format,
-            document_annotation_format=document_annotation_format
+            document_annotation_format=document_annotation_format,
+            intermediates_dir=intermediates_dir,
+            response_prefix=response_prefix
         )
     
     def _process_document(
@@ -139,6 +148,8 @@ class MistralOCR:
         image_min_size: Optional[int] = None,
         bbox_annotation_format: Optional[Dict[str, Any]] = None,
         document_annotation_format: Optional[Dict[str, Any]] = None,
+        intermediates_dir: Optional[Path] = None,
+        response_prefix: str = "ocr_response",
     ) -> Dict[str, Any]:
         """
         Internal method to process document with OCR.
@@ -162,7 +173,30 @@ class MistralOCR:
             document_annotation_format=document_annotation_format,
         )
         
-        return ocr_response.model_dump()
+        response_dict = ocr_response.model_dump()
+        
+        # Save intermediate response if debug mode is enabled
+        if intermediates_dir:
+            self._save_intermediate_response(
+                response_dict, 
+                intermediates_dir, 
+                f"{response_prefix}_{uuid.uuid4().hex[:8]}.json"
+            )
+        
+        return response_dict
+    
+    def _save_intermediate_response(self, response: Dict[str, Any], intermediates_dir: Path, filename: str):
+        """Save intermediate response to the intermediates directory."""
+        try:
+            intermediates_dir.mkdir(parents=True, exist_ok=True)
+            response_file = intermediates_dir / filename
+            
+            with open(response_file, 'w', encoding='utf-8') as f:
+                json.dump(response, f, indent=2, ensure_ascii=False, default=str)
+                
+            print(f"Saved intermediate response: {response_file}")
+        except Exception as e:
+            print(f"Warning: Failed to save intermediate response: {e}")
     
     def extract_markdown(self, ocr_response: Dict[str, Any], include_page_separators: bool = True) -> str:
         """
@@ -184,14 +218,14 @@ class MistralOCR:
                 page_idx = page.get("index", "?")
                 
                 if include_page_separators and markdown_parts:
-                    markdown_parts.append("\n\n---\n\n")
+                    markdown_parts.append("\n---\n\n")
                     
                 if include_page_separators:
-                    markdown_parts.append(f"<!-- Page {page_idx + 1} -->\n\n")
+                    markdown_parts.append(f"<!-- Page {page_idx + 1} -->\n")
                     
                 markdown_parts.append(page["markdown"])
         
-        return "".join(markdown_parts)
+        return "\n".join(markdown_parts)
     
     def extract_pages_markdown(self, ocr_response: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

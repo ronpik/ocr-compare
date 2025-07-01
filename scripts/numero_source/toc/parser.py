@@ -8,6 +8,7 @@ building the ToC incrementally using context from previous pages.
 import json
 import base64
 import mimetypes
+import uuid
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -32,13 +33,14 @@ class TableOfContentsParser:
         self.client = Mistral(api_key=api_key) if api_key else None
         self.ocr = MistralOCR(api_key=api_key)
     
-    def parse_from_pdf(self, pdf_path: str, toc_images_folder: str) -> TableOfContents:
+    def parse_from_pdf(self, pdf_path: str, toc_images_folder: str, intermediates_dir: Optional[Path] = None) -> TableOfContents:
         """
         Parse ToC from a PDF file and corresponding page images.
         
         Args:
             pdf_path: Path to the ToC PDF file
             toc_images_folder: Path to folder containing toc-1.jpg, toc-2.jpg, etc.
+            intermediates_dir: Directory to save intermediate responses (if debug mode)
             
         Returns:
             TableOfContents object with parsed entries
@@ -47,7 +49,11 @@ class TableOfContentsParser:
             raise ValueError("API key required for ToC parsing")
         
         # First, extract markdown from the entire PDF using OCR
-        ocr_response = self.ocr.process_file(pdf_path)
+        ocr_response = self.ocr.process_file(
+            pdf_path,
+            intermediates_dir=intermediates_dir,
+            response_prefix="toc_ocr"
+        )
         pages_markdown = self.ocr.extract_pages_markdown(ocr_response)
         
         # Find all ToC page images
@@ -55,10 +61,10 @@ class TableOfContentsParser:
         toc_images = []
         for i in range(1, 20):  # Support up to 20 pages
             image_path = toc_folder / f"toc-{i}.jpg"
-            if image_path.exists():
-                toc_images.append(str(image_path))
-            else:
+            if not image_path.exists():
                 break
+            
+            toc_images.append(str(image_path))
         
         if not toc_images:
             raise FileNotFoundError(f"No toc-*.jpg images found in {toc_images_folder}")
@@ -77,7 +83,8 @@ class TableOfContentsParser:
                 page_number=i + 1,
                 current_page_markdown=current_markdown,
                 previous_page_markdown=previous_context,
-                previous_entries=all_entries
+                previous_entries=all_entries,
+                intermediates_dir=intermediates_dir
             )
             
             all_entries.extend(page_entries)
@@ -95,7 +102,8 @@ class TableOfContentsParser:
         page_number: int,
         current_page_markdown: str,
         previous_page_markdown: Optional[str],
-        previous_entries: List[TocEntry]
+        previous_entries: List[TocEntry],
+        intermediates_dir: Optional[Path] = None
     ) -> List[TocEntry]:
         """
         Process a single ToC page to extract entries.
@@ -137,6 +145,10 @@ class TableOfContentsParser:
             temperature=0.1,
             max_tokens=8000
         )
+        
+        # Save intermediate response if debug mode is enabled
+        if intermediates_dir:
+            self._save_toc_page_response(response, intermediates_dir, page_number)
         
         try:
             response_data = json.loads(response.choices[0].message.content)
@@ -239,3 +251,27 @@ Example:
         
         base64_encoded = base64.b64encode(image_content).decode('utf-8')
         return f"data:{mime_type};base64,{base64_encoded}"
+    
+    def _save_toc_page_response(self, response, intermediates_dir: Path, page_number: int):
+        """Save ToC page processing response to intermediates directory."""
+        try:
+            intermediates_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save the full response object
+            response_file = intermediates_dir / f"toc_page_{page_number}_response_{uuid.uuid4().hex[:8]}.json"
+            
+            # Convert response to dict for JSON serialization
+            response_dict = {
+                "page_number": page_number,
+                "model": "pixtral-12b-latest",
+                "response_content": response.choices[0].message.content if response.choices else None,
+                "usage": response.usage.model_dump() if hasattr(response, 'usage') and response.usage else None,
+                "timestamp": str(uuid.uuid4())  # Simple timestamp placeholder
+            }
+            
+            with open(response_file, 'w', encoding='utf-8') as f:
+                json.dump(response_dict, f, indent=2, ensure_ascii=False)
+                
+            print(f"Saved ToC page {page_number} response: {response_file}")
+        except Exception as e:
+            print(f"Warning: Failed to save ToC page response: {e}")

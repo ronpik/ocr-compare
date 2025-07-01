@@ -89,14 +89,37 @@ for folder_name, result in results.items():
 
 ```bash
 # Process a single volume
-python -m numero_source.pipeline volume_folder/
+python -m numero_source.pipeline -i volume_folder/
 
 # Process multiple volumes
-python -m numero_source.pipeline volumes_folder/ --multiple
+python -m numero_source.pipeline -i volumes_folder/ --multiple
 
 # Specify output directory
-python -m numero_source.pipeline volume_folder/ --output-dir results/
+python -m numero_source.pipeline -i volume_folder/ --output-dir results/
+
+# Enable debug mode to save intermediate model responses
+python -m numero_source.pipeline -i volume_folder/ --debug
 ```
+
+### Debug Mode
+
+Enable debug mode with the `--debug` flag to save all intermediate model responses:
+
+```bash
+# Using the entry point script
+MISTRAL_API_KEY=your-key uv run scripts/run_numero_source.py -i volume_folder/ --debug
+
+# Using the pipeline directly
+MISTRAL_API_KEY=your-key uv run scripts/numero_source/pipeline.py -i volume_folder/ --debug
+```
+
+Debug mode creates an `intermediates/` folder in the output directory containing:
+
+- `intro_ocr_*.json` - OCR responses from intro PDF processing
+- `toc_ocr_*.json` - OCR responses from ToC PDF processing  
+- `toc_page_*_response_*.json` - Individual page processing responses from Pixtral model
+
+These files contain the raw API responses for debugging and analysis.
 
 ## Output Format
 
@@ -105,8 +128,9 @@ The pipeline generates a JSON file for each processed volume:
 ```json
 {
   "cover": {
-    "original": "/path/to/cover-1.jpg",
-    "thumbnail": "/path/to/thumbnail_cover-1.jpg"
+    "original": "volume_name/cover-1.png",
+    "thumbnail": "/path/to/thumbnail_cover-1.jpg", 
+    "thumbnail_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
   },
   "intro": "Combined introduction text from OCR...",
   "toc": {
@@ -148,7 +172,10 @@ The pipeline generates a JSON file for each processed volume:
 
 ### CoverProcessor
 - Finds and processes cover images
+- Creates standardized `cover-1.png` in the volume folder
 - Generates thumbnails with configurable size
+- Provides base64-encoded thumbnails for web display
+- Returns relative paths for portability
 - Handles multiple image formats
 
 ### IntroParser

@@ -12,12 +12,28 @@ from pathlib import Path
 
 from globalog import LOG
 
-from .ocr.mistral_ocr import MistralOCR
-from .toc.parser import TableOfContentsParser
-from .toc.models import TableOfContents
-from .processors.cover import CoverProcessor
-from .processors.intro import IntroParser
-from .schemas import BookProcessingResult, CoverInfo
+# Handle both relative imports (when used as module) and absolute imports (when run directly)
+try:
+    from .ocr.mistral_ocr import MistralOCR
+    from .toc.parser import TableOfContentsParser
+    from .toc.models import TableOfContents
+    from .processors.cover import CoverProcessor
+    from .processors.intro import IntroParser
+    from .schemas import BookProcessingResult, CoverInfo
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    from pathlib import Path
+    scripts_dir = Path(__file__).parent.parent
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    
+    from numero_source.ocr.mistral_ocr import MistralOCR
+    from numero_source.toc.parser import TableOfContentsParser
+    from numero_source.toc.models import TableOfContents
+    from numero_source.processors.cover import CoverProcessor
+    from numero_source.processors.intro import IntroParser
+    from numero_source.schemas import BookProcessingResult, CoverInfo
 
 
 class BookProcessor:
@@ -28,19 +44,21 @@ class BookProcessor:
     and table of contents to produce a structured JSON output.
     """
     
-    def __init__(self, api_key: Optional[str] = None, output_base_dir: str = "results"):
+    def __init__(self, api_key: Optional[str] = None, output_base_dir: str = "results", debug: bool = False):
         """
         Initialize the book processor.
         
         Args:
             api_key: Mistral API key for OCR processing
             output_base_dir: Base directory for output files
+            debug: Whether to save intermediate model responses
         """
         self.api_key = api_key or os.environ.get("MISTRAL_API_KEY", "")
         if not self.api_key:
             raise ValueError("MISTRAL_API_KEY is required")
         
         self.output_base_dir = Path(output_base_dir)
+        self.debug = debug
         
         # Initialize components
         self.ocr = MistralOCR(api_key=self.api_key)
@@ -72,6 +90,13 @@ class BookProcessor:
         output_dir = self.output_base_dir / folder_name
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Create intermediates directory if debug mode is enabled
+        intermediates_dir = None
+        if self.debug:
+            intermediates_dir = output_dir / "intermediates"
+            intermediates_dir.mkdir(parents=True, exist_ok=True)
+            LOG.info(f"Debug mode enabled. Intermediates will be saved to: {intermediates_dir}")
+        
         LOG.info(f"Processing volume: {folder_name}")
         
         # Process cover
@@ -80,11 +105,11 @@ class BookProcessor:
         
         # Process intro
         LOG.info("Processing intro...")
-        intro_text = self._process_intro(volume_path)
+        intro_text = self._process_intro(volume_path, intermediates_dir)
         
         # Process ToC
         LOG.info("Processing table of contents...")
-        toc = self._process_toc(volume_path)
+        toc = self._process_toc(volume_path, intermediates_dir)
         
         # Create result
         result = BookProcessingResult(
@@ -108,25 +133,26 @@ class BookProcessor:
         
         if cover_image_path:
             cover_data = self.cover_processor.process_cover_safe(
-                cover_image_path, 
+                cover_image_path,
+                str(volume_path),  # volume folder path
                 str(output_dir / "thumbnails")
             )
             return CoverInfo(**cover_data)
         else:
             LOG.info("Warning: No cover image found")
-            return CoverInfo(original=None, thumbnail=None)
+            return CoverInfo(original=None, thumbnail=None, thumbnail_base64=None)
     
-    def _process_intro(self, volume_path: Path) -> str:
+    def _process_intro(self, volume_path: Path, intermediates_dir: Optional[Path] = None) -> str:
         """Process the introduction PDF."""
         intro_pdf_path = volume_path / "intro.pdf"
         
         if intro_pdf_path.exists():
-            return self.intro_parser.parse_intro_safe(str(intro_pdf_path))
+            return self.intro_parser.parse_intro_safe(str(intro_pdf_path), intermediates_dir)
         else:
             LOG.info("Warning: No intro.pdf found")
             return ""
     
-    def _process_toc(self, volume_path: Path) -> TableOfContents:
+    def _process_toc(self, volume_path: Path, intermediates_dir: Optional[Path] = None) -> TableOfContents:
         """Process the table of contents."""
         toc_pdf_path = volume_path / "toc.pdf"
         
@@ -138,7 +164,7 @@ class BookProcessor:
         if not toc_images:
             raise FileNotFoundError(f"No toc-*.jpg images found in {volume_path}")
         
-        return self.toc_parser.parse_from_pdf(str(toc_pdf_path), str(volume_path))
+        return self.toc_parser.parse_from_pdf(str(toc_pdf_path), str(volume_path), intermediates_dir)
     
     def process_multiple_volumes(self, volumes_folder: str) -> Dict[str, BookProcessingResult]:
         """
@@ -176,10 +202,11 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Process book volumes with OCR")
-    parser.add_argument("--volume-path" '-i', type=Path, required=True, help="Path to volume folder or volumes folder")
+    parser.add_argument("--volume-path", '-i', type=Path, required=True, help="Path to volume folder or volumes folder")
     parser.add_argument("--output-dir", '-o', help="Output directory")
     parser.add_argument("--api-key", help="Mistral API key (or set MISTRAL_API_KEY env var)")
     parser.add_argument("--multiple", action="store_true", help="Process multiple volumes in folder")
+    parser.add_argument("--debug", action="store_true", help="Save intermediate model responses to intermediates folder")
     
     args = parser.parse_args()
 
@@ -189,7 +216,7 @@ def main():
         output_dir = Path(volume_path) / "results"
     
     try:
-        processor = BookProcessor(api_key=args.api_key, output_base_dir=output_dir)
+        processor = BookProcessor(api_key=args.api_key, output_base_dir=output_dir, debug=args.debug)
         
         if args.multiple:
             results = processor.process_multiple_volumes(volume_path)

@@ -5,9 +5,11 @@ This module processes cover images and creates thumbnails for the final output.
 """
 
 import os
+import base64
 from typing import Dict, Optional
 from pathlib import Path
 from PIL import Image
+from io import BytesIO
 
 
 class CoverProcessor:
@@ -27,16 +29,17 @@ class CoverProcessor:
         """
         self.thumbnail_size = thumbnail_size
     
-    def process_cover(self, cover_image_path: str, output_dir: str) -> Dict[str, str]:
+    def process_cover(self, cover_image_path: str, volume_folder: str, output_dir: str) -> Dict[str, Optional[str]]:
         """
-        Process a cover image and create a thumbnail.
+        Process a cover image and create a thumbnail with base64 encoding.
         
         Args:
             cover_image_path: Path to the original cover image
+            volume_folder: Path to the volume folder (for relative path calculation)
             output_dir: Directory to save the thumbnail
             
         Returns:
-            Dictionary with 'original' and 'thumbnail' paths
+            Dictionary with 'original', 'thumbnail', and 'thumbnail_base64'
             
         Raises:
             FileNotFoundError: If the cover image doesn't exist
@@ -49,56 +52,80 @@ class CoverProcessor:
             # Create output directory if it doesn't exist
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             
-            # Generate thumbnail
+            volume_path = Path(volume_folder)
+            volume_name = volume_path.name
+            
+            # Create standardized cover-1.png in the volume folder
+            standardized_cover_path = volume_path / "cover-1.png"
+            
+            # Generate thumbnail and base64
             original_path = Path(cover_image_path)
-            thumbnail_filename = f"thumbnail_{original_path.name}"
+            thumbnail_filename = f"thumbnail_{original_path.stem}.jpg"
             thumbnail_path = Path(output_dir) / thumbnail_filename
             
-            # Create thumbnail using PIL
+            # Process image with PIL
             with Image.open(cover_image_path) as img:
-                # Convert to RGB if necessary (for JPEG output)
+                # Convert to RGB if necessary
                 if img.mode in ('RGBA', 'LA', 'P'):
                     img = img.convert('RGB')
                 
-                # Create thumbnail maintaining aspect ratio
-                img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                # Save standardized cover-1.png
+                img.save(standardized_cover_path, 'PNG', quality=95)
                 
-                # Save thumbnail
-                img.save(thumbnail_path, 'JPEG', quality=85)
+                # Create thumbnail maintaining aspect ratio
+                thumbnail_img = img.copy()
+                thumbnail_img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                
+                # Save thumbnail to file
+                thumbnail_img.save(thumbnail_path, 'JPEG', quality=85)
+                
+                # Generate base64 thumbnail
+                buffer = BytesIO()
+                thumbnail_img.save(buffer, format='JPEG', quality=85)
+                thumbnail_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                thumbnail_base64_data_uri = f"data:image/jpeg;base64,{thumbnail_base64}"
+            
+            # Return relative path for original
+            relative_original_path = f"{volume_name}/cover-1.png"
             
             return {
-                "original": str(Path(cover_image_path).resolve()),
-                "thumbnail": str(thumbnail_path.resolve())
+                "original": relative_original_path,
+                "thumbnail": str(thumbnail_path.resolve()),
+                "thumbnail_base64": thumbnail_base64_data_uri
             }
             
         except Exception as e:
             raise Exception(f"Failed to process cover image: {e}")
     
-    def process_cover_safe(self, cover_image_path: str, output_dir: str) -> Dict[str, Optional[str]]:
+    def process_cover_safe(self, cover_image_path: str, volume_folder: str, output_dir: str) -> Dict[str, Optional[str]]:
         """
         Safely process a cover image, returning partial results on failure.
         
         Args:
             cover_image_path: Path to the original cover image
+            volume_folder: Path to the volume folder (for relative path calculation)
             output_dir: Directory to save the thumbnail
             
         Returns:
-            Dictionary with 'original' and 'thumbnail' paths (may be None on failure)
+            Dictionary with 'original', 'thumbnail', and 'thumbnail_base64' (may be None on failure)
         """
         try:
-            return self.process_cover(cover_image_path, output_dir)
+            return self.process_cover(cover_image_path, volume_folder, output_dir)
         except Exception as e:
             print(f"Warning: Failed to process cover image {cover_image_path}: {e}")
-            # Return original path if it exists, None for thumbnail
+            # Return relative path if it exists, None for others
             if os.path.exists(cover_image_path):
+                volume_name = Path(volume_folder).name
                 return {
-                    "original": str(Path(cover_image_path).resolve()),
-                    "thumbnail": None
+                    "original": f"{volume_name}/cover-1.png",
+                    "thumbnail": None,
+                    "thumbnail_base64": None
                 }
             else:
                 return {
                     "original": None,
-                    "thumbnail": None
+                    "thumbnail": None,
+                    "thumbnail_base64": None
                 }
     
     def find_cover_image(self, folder_path: str) -> Optional[str]:
