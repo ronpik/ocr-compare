@@ -110,5 +110,5 @@ examples/
 toc.json
 toc-fixed.json
 results/
-results-langgraph/
+results-langgraph*/
 volumes/

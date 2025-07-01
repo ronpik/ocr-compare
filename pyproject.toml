@@ -23,6 +23,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "httpx>=0.24.0",
     "langgraph>=0.0.69",
+    "globalog==0.1.0",
 ]
 
 [project.optional-dependencies]

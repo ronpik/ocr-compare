@@ -38,7 +38,7 @@ import sys
 import ast
 import traceback
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 from typing_extensions import TypedDict
 from pathlib import Path
 
@@ -78,19 +78,19 @@ class TocEntry(BaseModel):
             "if a top-level section, leave as null."
         )
     )
+    section_start_page: Optional[int] = Field(
+        None,
+        description=(
+            "The actual document page number *where the content for this entry begins*. "
+            "Use this to jump straight to the section’s first page—for example, `chapter_start_page=42`."
+        )
+    )
     toc_list_page: Optional[int] = Field(
         None,
         description=(
             "The printed or digital page number *where this entry is listed* in the Table of Contents itself. "
             "Use this to jump to the ToC listing—for example, if your ToC spans pages v–vii, you might see "
             "`toc_list_page=vi`."
-        )
-    )
-    chapter_start_page: Optional[int] = Field(
-        None,
-        description=(
-            "The actual document page number *where the content for this entry begins*. "
-            "Use this to jump straight to the section’s first page—for example, `chapter_start_page=42`."
         )
     )
 
@@ -111,6 +111,7 @@ class GraphState(TypedDict):
         is_image: True if the input file is an image
         max_validation_attempts: Maximum validation retry attempts
         max_execution_attempts: Maximum execution retry attempts
+        debug_mode: Whether to load OCR response from intermediates folder
         
         # OCR and initial extraction
         ocr_response: The raw JSON response from the OCR API
@@ -121,6 +122,8 @@ class GraphState(TypedDict):
         refinement_instructions: Natural language fix instructions
         fixer_script_code: Generated Python code to apply fixes
         syntax_check_passed: Whether the generated code passed syntax validation
+        csv_content: Generated CSV content for fixes
+        csv_file_path: Path to the CSV file with fixes
         
         # Results and tracking
         final_toc_path: Path to the final corrected ToC file
@@ -139,6 +142,7 @@ class GraphState(TypedDict):
     is_image: bool
     max_validation_attempts: int
     max_execution_attempts: int
+    debug_mode: bool
     
     ocr_response: Optional[Dict[str, Any]]
     raw_toc_json_path: Optional[str]
@@ -147,6 +151,8 @@ class GraphState(TypedDict):
     refinement_instructions: Optional[str]
     fixer_script_code: Optional[str]
     syntax_check_passed: bool
+    csv_content: Optional[str]
+    csv_file_path: Optional[str]
     
     final_toc_path: Optional[str]
     validation_attempts: int
@@ -243,7 +249,7 @@ def apply_fixes_from_csv(toc_data: Dict[str, Any], csv_file_path: str) -> Dict[s
                     new_value = row['new_value']
                     
                     # Convert new_value to appropriate type
-                    if field in ['start_page_number', 'toc_page_number', 'id', 'parent']:
+                    if field in ['section_start_page', 'toc_list_page', 'id', 'parent']:
                         if new_value.lower() in ['null', 'none', '']:
                             new_value = None
                         else:
@@ -352,15 +358,67 @@ def create_fallback_csv_content() -> str:
 def run_ocr_and_extract_toc(state: GraphState) -> GraphState:
     """
     Node 1: Runs the initial OCR process to extract text and a raw Table of Contents.
+    In debug mode, loads the OCR response from the intermediates folder instead.
     """
     print("--- Starting Node: run_ocr_and_extract_toc ---")
     file_path = state["file_path"]
     api_key = state["api_key"]
     output_folder = state["output_folder"]
+    debug_mode = state.get("debug_mode", False)
     
     # Create intermediates directory
     intermediates_dir = output_folder / "intermediates"
     intermediates_dir.mkdir(exist_ok=True)
+    
+    # In debug mode, try to load existing OCR response
+    if debug_mode:
+        raw_response_path = intermediates_dir / "01_ocr_raw_response.json"
+        if raw_response_path.exists():
+            print(f"Debug mode: Loading existing OCR response from {raw_response_path}")
+            try:
+                with open(raw_response_path, "r", encoding="utf-8") as f:
+                    loaded_response = json.load(f)
+                
+                # Handle both dict and string responses
+                ocr_response_dict = loaded_response
+                if isinstance(loaded_response, str):
+                    try:
+                        ocr_response_dict = json.loads(loaded_response)
+                    except json.JSONDecodeError:
+                        print("Debug mode: Invalid JSON string in OCR response, running OCR")
+                        ocr_response_dict = None
+                
+                # Try to reconstruct the state from the loaded response
+                if isinstance(ocr_response_dict, dict) and "pages" in ocr_response_dict:
+                    state["ocr_response"] = ocr_response_dict
+                    
+                    # Save markdown
+                    markdown_path = output_folder / "output.md"
+                    markdown_content = "\n\n---\n\n".join(
+                        [f"<!-- Page {p.get('index', '?') + 1} -->\n\n{p['markdown']}" for p in ocr_response_dict.get("pages", [])]
+                    )
+                    with open(markdown_path, "w", encoding="utf-8") as f:
+                        f.write(markdown_content)
+                    state["markdown_path"] = str(markdown_path)
+                    print(f"Debug mode: Markdown content saved to {markdown_path}")
+                    
+                    # Save raw ToC
+                    if ocr_response_dict.get("document_annotation"):
+                        toc_data = json.loads(ocr_response_dict["document_annotation"])
+                        if toc_data.get("entries"):
+                            raw_toc_path = output_folder / "toc.json"
+                            with open(raw_toc_path, "w", encoding="utf-8") as f:
+                                json.dump(toc_data, f, indent=2)
+                            state["raw_toc_json_path"] = str(raw_toc_path)
+                            print(f"Debug mode: Raw ToC loaded and saved to {raw_toc_path}")
+                            
+                    return state
+                else:
+                    print("Debug mode: Invalid OCR response format, running OCR")
+            except Exception as e:
+                print(f"Debug mode: Failed to load OCR response: {e}, running OCR")
+        else:
+            print(f"Debug mode: OCR response file not found at {raw_response_path}, running OCR")
 
     try:
         document_to_process = encode_file_to_base64(file_path)
@@ -458,20 +516,20 @@ def generate_refinement_instructions(state: GraphState) -> GraphState:
         # Common instruction examples for both image and PDF processing
         example_instructions = """
 EXAMPLE INSTRUCTIONS FORMAT:
-- modify the start_page_number of toc entry with id 1 to 15
-- modify the toc_page_number of toc entry with id 2 to 3
+- modify the section_start_page of toc entry with id 1 to 15
+- modify the toc_list_page of toc entry with id 2 to 3
 - change the text field of toc entry with id 3 to "Methodology and Approach"
 - change the parent field of toc entry with id 4 to 1
 - change the type field of toc entry with id 5 to "subsection"
 - remove toc entry with id 6
-- add new toc entry: type="section", text="Conclusion", parent=null, start_page_number=45, toc_page_number=2
+- add new toc entry: type="section", text="Conclusion", parent=null, section_start_page=45, toc_list_page=2
 
 CRITICAL REQUIREMENTS:
 1. Reference entries ONLY by their existing id field
-2. Use exact field names: start_page_number, toc_page_number, text, parent, type
+2. Use exact field names: section_start_page, toc_list_page, text, parent, type
 3. For parent field: use integer id or null (not "null" string)
 4. For type field: use only "section" or "subsection"
-5. Be precise: start_page_number = where section content begins, toc_page_number = where listed in ToC
+5. Be precise: section_start_page = where section content begins, toc_list_page = where listed in ToC
 6. If no changes needed, respond with exactly "No changes needed"
 """
 
@@ -494,21 +552,21 @@ Pay attention that the the table of contents may span over multiple pages, so th
 2. Cross-reference with the extracted ToC JSON
 3. Identify discrepancies in:
    - Section titles (exact text matching)
-   - start_page_number (where sections actually begin in content, where the sections and subsections are referring to)
-   - toc_page_number (in which page the entries appears as part of the ToC itself, regardless of where the section is referring to. This refer to the physical page at the beginning of the book where the this ToC entry appears)
+   - section_start_page (where sections actually begin in content, where the sections and subsections are referring to)
+   - toc_list_page (in which page the entries appears as part of the ToC itself, regardless of where the section is referring to. This refer to the physical page at the beginning of the book where the this ToC entry appears)
    - Hierarchy (which sections are nested under others)
    - Missing sections that appear in markdown but not in ToC
    - Extra ToC entries that don't correspond to actual sections
 
    **OUTPUT FORMAT:**
 Generate explicit fix instructions in this exact format:
-- modify the start_page_number of toc entry with id X to Y
-- modify the toc_page_number of toc entry with id X to Y
+- modify the section_start_page of toc entry with id X to Y
+- modify the toc_list_page of toc entry with id X to Y
 - change the text field of toc entry with id X to "correct text"
 - change the parent field of toc entry with id X to Y (or null for top-level sections)
 - change the type field of toc entry with id X to "section" (or "subsection")
 - remove toc entry with id X
-- add new toc entry: type="section", text="New Section", parent=null, start_page_number=10, toc_page_number=2
+- add new toc entry: type="section", text="New Section", parent=null, section_start_page=10, toc_list_page=2
 
 **EXAMPLE INSTRUCTIONS:**
 {example_instructions}
@@ -612,12 +670,12 @@ Generate a CSV with exactly this header: id,field,new_value
 
 Each row should specify:
 - id: The entry ID number (integer)
-- field: The field to modify (start_page_number, toc_page_number, text, parent, type)
+- field: The field to modify (section_start_page, toc_list_page, text, parent, type)
 - new_value: The new value for that field
 
 **FIELD TYPES:**
-- start_page_number: integer (page where section content begins)
-- toc_page_number: integer (page where entry appears in ToC)
+- section_start_page: integer (page where section content begins)
+- toc_list_page: integer (page where entry appears in ToC)
 - text: string (section title text)
 - parent: integer or null (parent entry ID)
 - type: string ("section" or "subsection")
@@ -625,8 +683,8 @@ Each row should specify:
 **EXAMPLE CSV OUTPUT:**
 ```csv
 id,field,new_value
-1,start_page_number,15
-1,toc_page_number,2
+1,section_start_page,15
+1,toc_list_page,2
 3,text,"Corrected Section Title"
 5,parent,1
 6,type,subsection
@@ -634,7 +692,7 @@ id,field,new_value
 
 **CRITICAL RULES:**
 - Each fix instruction should become one or more CSV rows
-- Use exact field names: start_page_number, toc_page_number, text, parent, type
+- Use exact field names: section_start_page, toc_list_page, text, parent, type
 - For null values, use: null
 - For text values with commas, use quotes: "text with, comma"
 - Only include rows for fields that need to be changed
@@ -785,6 +843,11 @@ def validate_script(state: GraphState) -> GraphState:
         print("csv_content missing - using fallback CSV")
         state["csv_content"] = create_fallback_csv_content()
         state["last_validation_feedback"] = "OK"
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         return state
 
     # Skip validation for fallback "no changes" CSV
@@ -821,7 +884,7 @@ def validate_script(state: GraphState) -> GraphState:
 
 **VALIDATION CRITERIA:**
 1. Does the CSV implement ALL instructions listed?
-2. Are the field names correct (start_page_number, toc_page_number, text, parent, type)?
+2. Are the field names correct (section_start_page, toc_list_page, text, parent, type)?
 3. Are the entry IDs referenced correctly?
 4. Are the new values exactly as specified in the instructions?
 5. Is the CSV format correct (id,field,new_value)?
@@ -833,8 +896,8 @@ def validate_script(state: GraphState) -> GraphState:
 
 **EXAMPLES OF GOOD RESPONSES:**
 - "OK"
-- "ISSUE: Missing fix for entry id 6 start_page_number"
-- "ISSUE: Wrong field name used - should be start_page_number not page_number"
+- "ISSUE: Missing fix for entry id 6 section_start_page"
+- "ISSUE: Wrong field name used - should be section_start_page not page_number"
 - "ISSUE: Entry id 3 text change not implemented"
 - "ISSUE: CSV format incorrect - missing header"
 
@@ -956,8 +1019,8 @@ Must have header: id,field,new_value
 Each row: entry_id,field_name,new_value
 
 **FIELD TYPES:**
-- start_page_number: integer
-- toc_page_number: integer  
+- section_start_page: integer
+- toc_list_page: integer  
 - text: string (use quotes if contains commas)
 - parent: integer or null
 - type: string ("section" or "subsection")
@@ -965,7 +1028,7 @@ Each row: entry_id,field_name,new_value
 **REQUIREMENTS:**
 - Address the specific issue mentioned in the validation feedback
 - Ensure ALL original instructions are implemented
-- Use exact field names: start_page_number, toc_page_number, text, parent, type
+- Use exact field names: section_start_page, toc_list_page, text, parent, type
 - For null values, use: null
 - Include all required changes from the original instructions
 - Start with header: id,field,new_value
@@ -995,35 +1058,11 @@ Each row: entry_id,field_name,new_value
         new_fix_logic = response.choices[0].message.content.strip()
         print(new_fix_logic)
         
-        # Parse the response similar to generate_fixer_script
-        if "```python" in new_fix_logic:
-            # Extract each python block separately
-            parts = new_fix_logic.split("```python")
-            if len(parts) >= 3:  # Should have at least 2 python blocks
-                setup_part = parts[1].split("```")[0].strip()
-                apply_part = parts[2].split("```")[0].strip()
-            else:
-                # Fallback: try to split by separator
-                if "---APPLY_FIXES---" in new_fix_logic:
-                    sections = new_fix_logic.split("---APPLY_FIXES---")
-                    setup_part = sections[0].replace("```python", "").replace("```", "").strip()
-                    apply_part = sections[1].replace("```python", "").replace("```", "").strip()
-                else:
-                    setup_part = "pass  # No setup needed"
-                    apply_part = new_fix_logic.split("```python")[1].split("```")[0].strip()
-        else:
-            # Try to split by separator
-            if "---APPLY_FIXES---" in new_fix_logic:
-                sections = new_fix_logic.split("---APPLY_FIXES---")
-                setup_part = sections[0].strip()
-                apply_part = sections[1].strip()
-            else:
-                # Assume it's all application logic
-                setup_part = "pass  # No setup needed"
-                apply_part = new_fix_logic
+        # For CSV approach, we expect the response to be CSV content, not Python code
+        # So we don't need to parse Python blocks
         
         # Clean up the CSV response
-        clean_csv = new_csv_content
+        clean_csv = new_fix_logic
         if "```csv" in clean_csv:
             clean_csv = clean_csv.split("```csv")[1].split("```")[0].strip()
         elif "```" in clean_csv:
@@ -1116,6 +1155,19 @@ def execute_fixer_script(state: GraphState) -> GraphState:
         # Execute with extended timeout and better error capture
         # Convert to absolute paths to avoid path issues
         abs_original_file = os.path.abspath(original_toc_file)
+        
+        # Safety check for csv_file_path
+        if "csv_file_path" not in state or not state["csv_file_path"]:
+            # Try to find the CSV file if it's missing from state
+            csv_path = state["output_folder"] / "toc-fixes.csv"
+            if csv_path.exists():
+                state["csv_file_path"] = str(csv_path)
+                print(f"Found CSV file at {csv_path}")
+            else:
+                state["last_execution_error"] = "csv_file_path missing from state and no CSV file found"
+                print("Error: csv_file_path missing from state and no CSV file found")
+                return state
+            
         abs_csv_file = os.path.abspath(state["csv_file_path"])
         abs_fixed_file = os.path.abspath(fixed_toc_file)
         
@@ -1204,6 +1256,11 @@ def fix_execution_error(state: GraphState) -> GraphState:
         state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback-file-not-found.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         return state
         
     if "JSON" in error_message and ("decode" in error_message.lower() or "invalid" in error_message.lower()):
@@ -1212,6 +1269,11 @@ def fix_execution_error(state: GraphState) -> GraphState:
         state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback-json-error.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         return state
     
     # For other errors, try a conservative fix approach
@@ -1266,6 +1328,11 @@ Focus on these common fixes:
         state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0  # Reset validation attempts
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback-execution-fix.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         
     except Exception as e:
         print(f"Error in execution fixing: {e}")
@@ -1274,6 +1341,11 @@ Focus on these common fixes:
         state["fixer_script_code"] = get_csv_fixer_script()
         state["syntax_check_passed"] = True
         state["validation_attempts"] = 0
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback-execution-fix-error.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         # Save error details
         intermediates_dir = state["output_folder"] / "intermediates"
         intermediates_dir.mkdir(exist_ok=True)
@@ -1324,6 +1396,11 @@ def check_validation(state: GraphState) -> str:
         state["fixer_script_code"] = get_csv_fixer_script()
         state["last_validation_feedback"] = "OK"
         state["syntax_check_passed"] = True
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback-multi-errors.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         return "execute"
     
     if state["validation_attempts"] >= max_attempts:
@@ -1334,6 +1411,11 @@ def check_validation(state: GraphState) -> str:
         state["fixer_script_code"] = get_csv_fixer_script()
         state["last_validation_feedback"] = "OK"
         state["syntax_check_passed"] = True
+        # Save the fallback CSV file and set the path
+        csv_path = state["output_folder"] / "toc-fixes-fallback-max-attempts.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(state["csv_content"])
+        state["csv_file_path"] = str(csv_path)
         return "execute"
         
     print(f"Validation failed (attempt {state['validation_attempts']}/{max_attempts}). Proceeding to refactor script.")
@@ -1385,7 +1467,8 @@ def run_workflow(
     max_validation_attempts: Annotated[int, typer.Option("--max-validation-attempts", help="Maximum validation retry attempts.")] =5,
     max_execution_attempts: Annotated[int, typer.Option("--max-execution-attempts", help="Maximum execution retry attempts.")] = 5,
     save_intermediate: Annotated[bool, typer.Option("--save-intermediate", help="Save all intermediate files for debugging.")] = True,
-    draw_graph: Annotated[Optional[str], typer.Option("--draw-graph", help="Path to save workflow graph visualization (PNG format).")] = None
+    draw_graph: Annotated[Optional[str], typer.Option("--draw-graph", help="Path to save workflow graph visualization (PNG format).")] = None,
+    debug: Annotated[bool, typer.Option("--debug", help="Debug mode: load existing OCR response from intermediates folder instead of running OCR.")] = False
 ):
     """
     Initializes and runs the enhanced ToC extraction and refinement graph with configurable retry logic.
@@ -1440,6 +1523,7 @@ def run_workflow(
     print(f"🔧 Max validation attempts: {max_validation_attempts}")
     print(f"🔧 Max execution attempts: {max_execution_attempts}")
     print(f"💾 Save intermediate files: {save_intermediate}")
+    print(f"🐛 Debug mode: {debug}")
     if draw_graph:
         print(f"📊 Graph visualization: {draw_graph}")
 
@@ -1509,6 +1593,7 @@ def run_workflow(
         "is_image": is_image,
         "max_validation_attempts": max_validation_attempts,
         "max_execution_attempts": max_execution_attempts,
+        "debug_mode": debug,
         
         # Initialize other state fields
         "ocr_response": None,
@@ -1517,6 +1602,8 @@ def run_workflow(
         "refinement_instructions": None,
         "fixer_script_code": None,
         "syntax_check_passed": False,
+        "csv_content": None,
+        "csv_file_path": None,
         "final_toc_path": None,
         "validation_attempts": 0,
         "execution_attempts": 0,
