@@ -176,8 +176,8 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Process book volumes with OCR")
-    parser.add_argument("volume_path", type=Path, required=True, help="Path to volume folder or volumes folder")
-    parser.add_argument("--output-dir", default="numero_results", help="Output directory")
+    parser.add_argument("--volume-path" '-i', type=Path, required=True, help="Path to volume folder or volumes folder")
+    parser.add_argument("--output-dir", '-o', help="Output directory")
     parser.add_argument("--api-key", help="Mistral API key (or set MISTRAL_API_KEY env var)")
     parser.add_argument("--multiple", action="store_true", help="Process multiple volumes in folder")
     
